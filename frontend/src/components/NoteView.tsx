@@ -1,8 +1,10 @@
-// 单笔记视图（Obsidian 阅读视图 + 编辑模式）：主内容区渲染
+// 单笔记视图（Obsidian 阅读视图 + CodeMirror 编辑模式）：主内容区渲染
 import { useEffect, useState } from "react";
 import type { MouseEvent } from "react";
 import { Button, Segmented, Space, Spin, message } from "antd";
 import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
+import CodeMirror from "@uiw/react-codemirror";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore, type OutlineItem } from "../stores/tabs";
@@ -44,7 +46,7 @@ export default function NoteView({ noteId }: { noteId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId]);
 
-  // wikilink 跳转 → 开新 tab（或在已开时激活）
+  // wikilink 跳转 → 开新 tab
   const onPreviewClick = async (e: MouseEvent<HTMLDivElement>) => {
     if (!vault) return;
     const el = (e.target as HTMLElement).closest(".helmose-wikilink") as HTMLElement | null;
@@ -137,11 +139,24 @@ export default function NoteView({ noteId }: { noteId: string }) {
       </div>
 
       {editing ? (
-        <textarea
-          className="ob-editor"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-        />
+        <div className="ob-editor-wrap">
+          <CodeMirror
+            value={draft}
+            onChange={(val) => setDraft(val)}
+            extensions={[markdown({ base: markdownLanguage })]}
+            theme="light"
+            basicSetup={{
+              lineNumbers: false,
+              foldGutter: true,
+              highlightActiveLine: false,
+              highlightActiveLineGutter: false,
+            }}
+            style={{
+              fontSize: 14,
+              fontFamily: '"SFMono-Regular", Menlo, Consolas, monospace',
+            }}
+          />
+        </div>
       ) : (
         <div onClick={onPreviewClick}>
           <h1
