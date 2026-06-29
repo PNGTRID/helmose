@@ -1,5 +1,5 @@
 // 左面板：Obsidian 式「目录+文件混合树」+ 全库搜索 + 排序
-// 一次拉取所有 NoteMeta + 目录，前端构建完整嵌套树。支持排序（数字自然/字母）。
+// 顶部显示 Vault 名；树从根目录内容开始（顶层文件夹+根文件）；节点文字单行省略号。
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Empty, Input, Segmented, Spin, Tree } from "antd";
 import {
@@ -27,13 +27,12 @@ interface TreeNode {
 function fileIcon(name: string): ReactNode {
   const ext = name.split(".").pop()?.toLowerCase();
   if (ext === "md" || ext === "markdown")
-    return <FileTextOutlined style={{ marginRight: 6, color: "#8b5cf6" }} />;
+    return <FileTextOutlined style={{ marginRight: 6, color: "#8b5cf6", flexShrink: 0 }} />;
   if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext ?? ""))
-    return <FileImageOutlined style={{ marginRight: 6, color: "#10b981" }} />;
-  return <FileOutlined style={{ marginRight: 6, color: "var(--ob-text-faint)" }} />;
+    return <FileImageOutlined style={{ marginRight: 6, color: "#10b981", flexShrink: 0 }} />;
+  return <FileOutlined style={{ marginRight: 6, color: "var(--ob-text-faint)", flexShrink: 0 }} />;
 }
 
-/** 排序比较：natural=数字感知（2 < 10），name=纯字母 */
 function makeCompare(mode: SortMode) {
   if (mode === "name") {
     return (a: string, b: string) => a.localeCompare(b, "zh-Hans", { sensitivity: "base" });
@@ -49,17 +48,13 @@ function childDirs(dir: string, dirs: string[]): string[] {
   });
 }
 
-function isOpen(dir: string, expanded: string[]): boolean {
-  return expanded.includes("dir:" + dir);
-}
-
 export default function FilePanel({ width }: { width: number }) {
   const vault = useVaultStore((s) => s.vault);
   const watcherTick = useVaultStore((s) => s.watcherTick);
   const openNote = useTabsStore((s) => s.openNote);
 
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
-  const [expandedKeys, setExpandedKeys] = useState<string[]>(["dir:"]);
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("natural");
 
@@ -85,27 +80,24 @@ export default function FilePanel({ width }: { width: number }) {
           notesByDir.get(d)!.push(n);
         }
         const cmp = makeCompare(sortMode);
-        const build = (dir: string): TreeNode => {
+
+        // 构建某目录的直接子（目录 + 文件，混合排序）
+        const buildChildren = (dir: string): TreeNode[] => {
           const subs = childDirs(dir, dirs);
-          const dirNodes: TreeNode[] = subs.map((sd) => ({
-            key: "dir:" + sd,
-            sortKey: sd.split("/").pop() ?? sd,
-            title: (
-              <span>
-                {(dir === "" || isOpen(dir, expandedKeys)) ? (
-                  <FolderOpenOutlined style={{ marginRight: 6, color: "#eab308" }} />
-                ) : (
-                  <FolderOutlined style={{ marginRight: 6, color: "#eab308" }} />
-                )}
-                {sd.split("/").pop() ?? sd}
-              </span>
-            ),
-            isLeaf: false,
-            children: [],
-          }));
-          // 先递归填子目录 children
-          subs.forEach((sd, i) => {
-            dirNodes[i].children = build(sd).children;
+          const dirNodes: TreeNode[] = subs.map((sd) => {
+            const name = sd.split("/").pop() ?? sd;
+            return {
+              key: "dir:" + sd,
+              sortKey: name,
+              title: (
+                <span className="ob-node-title">
+                  <FolderOutlined style={{ marginRight: 6, color: "#eab308", flexShrink: 0 }} />
+                  <span className="ob-node-label">{name}</span>
+                </span>
+              ),
+              isLeaf: false,
+              children: buildChildren(sd),
+            };
           });
           const fileNodes: TreeNode[] = (notesByDir.get(dir) ?? []).map((n) => {
             const k = "file:" + n.id;
@@ -114,38 +106,22 @@ export default function FilePanel({ width }: { width: number }) {
               key: k,
               sortKey: n.file_name,
               title: (
-                <span>
+                <span className="ob-node-title">
                   {fileIcon(n.file_name)}
-                  {n.file_name}
+                  <span className="ob-node-label">{n.file_name}</span>
                 </span>
               ),
               isLeaf: true,
             };
           });
-          // 混合排序（目录+文件按名，Obsidian 式）
-          const all = [...dirNodes, ...fileNodes].sort((a, b) =>
-            cmp(a.sortKey ?? "", b.sortKey ?? "")
-          );
-          const isRoot = dir === "";
-          const name = isRoot ? <strong>{vault.name}</strong> : dir.split("/").pop() ?? dir;
-          return {
-            key: "dir:" + dir,
-            sortKey: dir,
-            title: (
-              <span>
-                {isRoot || isOpen(dir, expandedKeys) ? (
-                  <FolderOpenOutlined style={{ marginRight: 6, color: "#eab308" }} />
-                ) : (
-                  <FolderOutlined style={{ marginRight: 6, color: "#eab308" }} />
-                )}
-                {name}
-              </span>
-            ),
-            isLeaf: false,
-            children: all,
-          };
+          return [...dirNodes, ...fileNodes].sort((a, b) => cmp(a.sortKey ?? "", b.sortKey ?? ""));
         };
-        setTreeData([build("")]);
+
+        setTreeData(buildChildren(""));
+        // 首次默认展开顶层目录（之后保留用户展开状态）
+        setExpandedKeys((prev) =>
+          prev.length ? prev : childDirs("", dirs).map((d) => "dir:" + d)
+        );
       })
       .catch(() => setTreeData([]))
       .finally(() => setLoading(false));
@@ -173,7 +149,8 @@ export default function FilePanel({ width }: { width: number }) {
 
   const onSelect = (keys: React.Key[]) => {
     const k = keys[0] as string | undefined;
-    if (k && k.startsWith("file:")) {
+    if (!k) return;
+    if (k.startsWith("file:")) {
       const note = fileMap.current.get(k);
       if (note) {
         openNote({
@@ -183,6 +160,11 @@ export default function FilePanel({ width }: { width: number }) {
           rel_path: note.rel_path,
         });
       }
+    } else if (k.startsWith("dir:")) {
+      // 点击文件夹名也切换展开/折叠（不只点小三角）
+      setExpandedKeys((prev) =>
+        prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]
+      );
     }
   };
 
@@ -191,7 +173,10 @@ export default function FilePanel({ width }: { width: number }) {
   return (
     <div className="ob-file-panel" style={{ width }}>
       <div className="ob-panel-header">
-        <span>资源管理器</span>
+        <span className="ob-vault-title">
+          <FolderOpenOutlined style={{ marginRight: 6, color: "#eab308", flexShrink: 0 }} />
+          <span className="ob-node-label">{vault.name}</span>
+        </span>
         <Segmented
           size="small"
           value={sortMode}
@@ -231,19 +216,11 @@ export default function FilePanel({ width }: { width: number }) {
                   })
                 }
               >
-                <span style={{ display: "inline-flex", alignItems: "center" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%" }}>
                   {fileIcon(r.file_name)}
-                  <span
-                    style={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {r.file_name}
-                  </span>
+                  <span className="ob-node-label">{r.file_name}</span>
                 </span>
-                <div className="ob-file-sub">{r.rel_path}</div>
+                <div className="ob-file-sub ob-node-label">{r.rel_path}</div>
               </div>
             ))
           )
