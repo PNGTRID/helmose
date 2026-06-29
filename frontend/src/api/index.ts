@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { AgentExport, Backlink, GraphData, IndexStats, Note, NoteContent, NoteMeta, SearchResult, TagCount, Task, Vault, VaultInput } from '../types';
+import type { AgentExport, Backlink, GraphData, IndexStats, Note, NoteContent, NoteMeta, Project, SearchResult, TagCount, Task, Vault, VaultInput } from '../types';
 
 export async function ping(): Promise<string> {
   return invoke<string>('ping');
@@ -168,4 +168,9 @@ export async function startWatcher(vaultId: string): Promise<void> {
 /** 检测是否需要重新索引（磁盘 md 数 vs notes 数差异 >10%） */
 export async function shouldReindex(vaultId: string): Promise<boolean> {
   return invoke<boolean>('should_reindex', { vaultId });
+}
+
+/** 查询项目（可按 status 筛选） */
+export async function getProjects(vaultId: string, status?: string): Promise<Project[]> {
+  return invoke<Project[]>('get_projects', { vaultId, status: status ?? null });
 }

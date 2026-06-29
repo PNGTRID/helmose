@@ -131,3 +131,17 @@ export interface GraphData {
 
 /** 标签计数（[tag, count] 元组，对齐 Rust serde tuple 序列化） */
 export type TagCount = [string, number];
+
+/** 业务项目（frontmatter type:project） */
+export interface Project {
+  id: string;
+  vault_id: string;
+  note_id: string;
+  name: string;
+  status: string | null;
+  priority: number | null;
+  is_mainline: boolean;
+  okr_priority: string | null;
+  home_rel_path: string | null;
+  last_activity: string | null;
+}

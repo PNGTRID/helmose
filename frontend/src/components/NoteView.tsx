@@ -103,40 +103,55 @@ export default function NoteView({ noteId }: { noteId: string }) {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: 16,
+          marginBottom: 12,
+          gap: 8,
         }}
       >
-        <Segmented
-          value={editing ? "edit" : "preview"}
-          onChange={(v) => {
-            if (String(v) === "edit") {
-              setDraft(content.raw_content);
-              setEditing(true);
-            } else {
-              setEditing(false);
-            }
+        <span
+          style={{
+            fontSize: 12,
+            color: "var(--ob-text-faint)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            minWidth: 0,
           }}
-          options={[
-            { label: "阅读", value: "preview" },
-            { label: "编辑", value: "edit" },
-          ]}
-        />
-        {editing && (
-          <Space>
-            <Button size="small" icon={<CloseOutlined />} onClick={() => setEditing(false)}>
-              取消
-            </Button>
-            <Button
-              size="small"
-              type="primary"
-              icon={<SaveOutlined />}
-              loading={saving}
-              onClick={save}
-            >
-              保存
-            </Button>
-          </Space>
-        )}
+        >
+          {content.rel_path}
+        </span>
+        <Space>
+          <Segmented
+            value={editing ? "edit" : "preview"}
+            onChange={(v) => {
+              if (String(v) === "edit") {
+                setDraft(content.raw_content);
+                setEditing(true);
+              } else {
+                setEditing(false);
+              }
+            }}
+            options={[
+              { label: "阅读", value: "preview" },
+              { label: "编辑", value: "edit" },
+            ]}
+          />
+          {editing && (
+            <>
+              <Button size="small" icon={<CloseOutlined />} onClick={() => setEditing(false)}>
+                取消
+              </Button>
+              <Button
+                size="small"
+                type="primary"
+                icon={<SaveOutlined />}
+                loading={saving}
+                onClick={save}
+              >
+                保存
+              </Button>
+            </>
+          )}
+        </Space>
       </div>
 
       {editing ? (
@@ -179,16 +194,6 @@ export default function NoteView({ noteId }: { noteId: string }) {
         </div>
       ) : (
         <div onClick={onPreviewClick}>
-          <h1
-            style={{
-              fontSize: "1.9em",
-              fontWeight: 700,
-              marginBottom: 6,
-              lineHeight: 1.2,
-            }}
-          >
-            {content.title ?? noteId}
-          </h1>
           <div
             className="md-preview"
             dangerouslySetInnerHTML={{ __html: content.html }}

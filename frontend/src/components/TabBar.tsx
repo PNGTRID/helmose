@@ -5,6 +5,7 @@ import {
   CheckSquareOutlined,
   CloseOutlined,
   FileTextOutlined,
+  ProjectOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { useTabsStore, type Tab } from "../stores/tabs";
@@ -19,6 +20,8 @@ function iconFor(t: Tab) {
       return <AimOutlined />;
     case "tasks":
       return <CheckSquareOutlined />;
+    case "projects":
+      return <ProjectOutlined />;
     case "settings":
       return <SettingOutlined />;
   }

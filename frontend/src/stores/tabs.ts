@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import type { Backlink } from '../types';
 
-export type TabType = 'note' | 'graph' | 'today' | 'tasks' | 'settings';
+export type TabType = 'note' | 'graph' | 'today' | 'tasks' | 'settings' | 'projects';
 
 export interface Tab {
   id: string;

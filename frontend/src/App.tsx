@@ -16,6 +16,7 @@ import NoteView from "./components/NoteView";
 import GraphPage from "./pages/GraphPage";
 import TasksPage from "./pages/TasksPage";
 import TodayPage from "./pages/TodayPage";
+import ProjectsPage from "./pages/ProjectsPage";
 import SettingsPage from "./pages/SettingsPage";
 
 const { Text } = Typography;
@@ -177,6 +178,8 @@ export default function App() {
         return <TodayPage />;
       case "tasks":
         return <TasksPage />;
+      case "projects":
+        return <ProjectsPage />;
       case "settings":
         return <SettingsPage />;
       default:

@@ -61,6 +61,8 @@ pub fn run() {
             commands::library::get_graph_data,
             // 任务
             commands::tasks::get_tasks,
+            // 项目
+            commands::projects::get_projects,
             // 全库搜索（FTS5）
             commands::search::search_notes,
             // Agent 状态导出（写 app_data_dir/agent）

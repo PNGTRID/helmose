@@ -5,6 +5,7 @@ import {
   ApartmentOutlined,
   AimOutlined,
   CheckSquareOutlined,
+  ProjectOutlined,
   SettingOutlined,
   BlockOutlined,
 } from "@ant-design/icons";
@@ -60,6 +61,13 @@ export default function Ribbon() {
         onClick={() => openView("tasks", "任务")}
       >
         <CheckSquareOutlined />
+      </button>
+      <button
+        className={`ob-ribbon-btn ${isActiveView("projects") ? "active" : ""}`}
+        title="项目"
+        onClick={() => openView("projects", "项目")}
+      >
+        <ProjectOutlined />
       </button>
       <div className="ob-ribbon-spacer" />
       <button
