@@ -1,8 +1,7 @@
-// 左面板：Obsidian 式「目录+文件混合树」（完整树，一次构建）+ 全库搜索 + 标签
-// 一次拉取所有 NoteMeta（无正文）+ 全部目录，前端构建完整嵌套树。
-// 任意目录展开即可见其子文件夹与文件（无需按需加载，避免"看不到深层 md"）。
+// 左面板：Obsidian 式「目录+文件混合树」+ 全库搜索 + 排序
+// 一次拉取所有 NoteMeta + 目录，前端构建完整嵌套树。支持排序（数字自然/字母）。
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Empty, Input, Spin, Tree, Typography } from "antd";
+import { Empty, Input, Segmented, Spin, Tree } from "antd";
 import {
   FileImageOutlined,
   FileOutlined,
@@ -13,18 +12,18 @@ import {
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
-import type { NoteMeta, SearchResult, TagCount } from "../types";
+import type { NoteMeta, SearchResult } from "../types";
 
-const { Text } = Typography;
+type SortMode = "natural" | "name";
 
 interface TreeNode {
-  key: string; // "dir:<path>" 或 "file:<id>"
+  key: string;
   title: ReactNode;
   isLeaf?: boolean;
   children?: TreeNode[];
+  sortKey?: string;
 }
 
-/** 按扩展名返回文件图标 */
 function fileIcon(name: string): ReactNode {
   const ext = name.split(".").pop()?.toLowerCase();
   if (ext === "md" || ext === "markdown")
@@ -34,7 +33,15 @@ function fileIcon(name: string): ReactNode {
   return <FileOutlined style={{ marginRight: 6, color: "var(--ob-text-faint)" }} />;
 }
 
-/** 某目录的直接子目录（从扁平 dirs 列表） */
+/** 排序比较：natural=数字感知（2 < 10），name=纯字母 */
+function makeCompare(mode: SortMode) {
+  if (mode === "name") {
+    return (a: string, b: string) => a.localeCompare(b, "zh-Hans", { sensitivity: "base" });
+  }
+  return (a: string, b: string) =>
+    a.localeCompare(b, "zh-Hans", { numeric: true, sensitivity: "base" });
+}
+
 function childDirs(dir: string, dirs: string[]): string[] {
   return dirs.filter((d) => {
     if (dir === "") return d !== "" && !d.includes("/");
@@ -42,20 +49,19 @@ function childDirs(dir: string, dirs: string[]): string[] {
   });
 }
 
-/** 判断 dir 是否在 expandedKeys 中（含祖先链）——用于目录开/合图标 */
 function isOpen(dir: string, expanded: string[]): boolean {
   return expanded.includes("dir:" + dir);
 }
 
-export default function FilePanel() {
+export default function FilePanel({ width }: { width: number }) {
   const vault = useVaultStore((s) => s.vault);
   const watcherTick = useVaultStore((s) => s.watcherTick);
   const openNote = useTabsStore((s) => s.openNote);
 
-  const [tags, setTags] = useState<TagCount[]>([]);
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<string[]>(["dir:"]);
   const [loading, setLoading] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>("natural");
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -64,20 +70,12 @@ export default function FilePanel() {
 
   const fileMap = useRef<Map<string, NoteMeta>>(new Map());
 
-  // 一次拉取目录 + 全部笔记元数据 + 标签，构建完整树
   useEffect(() => {
     if (!vault) return;
     setLoading(true);
-    Promise.all([
-      api.listDirs(vault.id),
-      api.listAllNotesMeta(vault.id),
-      api.getTagsStats(vault.id).catch(() => []),
-    ])
-      .then(([dirs, notes, tg]) => {
-        setTags(tg);
+    Promise.all([api.listDirs(vault.id), api.listAllNotesMeta(vault.id)])
+      .then(([dirs, notes]) => {
         fileMap.current.clear();
-
-        // 按父目录分组文件
         const notesByDir = new Map<string, NoteMeta[]>();
         for (const n of notes) {
           const d = n.rel_path.includes("/")
@@ -86,16 +84,35 @@ export default function FilePanel() {
           if (!notesByDir.has(d)) notesByDir.set(d, []);
           notesByDir.get(d)!.push(n);
         }
-
-        // 递归构建完整树
+        const cmp = makeCompare(sortMode);
         const build = (dir: string): TreeNode => {
           const subs = childDirs(dir, dirs);
-          const dirChildren = subs.map(build);
+          const dirNodes: TreeNode[] = subs.map((sd) => ({
+            key: "dir:" + sd,
+            sortKey: sd.split("/").pop() ?? sd,
+            title: (
+              <span>
+                {(dir === "" || isOpen(dir, expandedKeys)) ? (
+                  <FolderOpenOutlined style={{ marginRight: 6, color: "#eab308" }} />
+                ) : (
+                  <FolderOutlined style={{ marginRight: 6, color: "#eab308" }} />
+                )}
+                {sd.split("/").pop() ?? sd}
+              </span>
+            ),
+            isLeaf: false,
+            children: [],
+          }));
+          // 先递归填子目录 children
+          subs.forEach((sd, i) => {
+            dirNodes[i].children = build(sd).children;
+          });
           const fileNodes: TreeNode[] = (notesByDir.get(dir) ?? []).map((n) => {
             const k = "file:" + n.id;
             fileMap.current.set(k, n);
             return {
               key: k,
+              sortKey: n.file_name,
               title: (
                 <span>
                   {fileIcon(n.file_name)}
@@ -105,13 +122,18 @@ export default function FilePanel() {
               isLeaf: true,
             };
           });
+          // 混合排序（目录+文件按名，Obsidian 式）
+          const all = [...dirNodes, ...fileNodes].sort((a, b) =>
+            cmp(a.sortKey ?? "", b.sortKey ?? "")
+          );
           const isRoot = dir === "";
           const name = isRoot ? <strong>{vault.name}</strong> : dir.split("/").pop() ?? dir;
           return {
             key: "dir:" + dir,
+            sortKey: dir,
             title: (
               <span>
-                {(isRoot || isOpen(dir, expandedKeys)) ? (
+                {isRoot || isOpen(dir, expandedKeys) ? (
                   <FolderOpenOutlined style={{ marginRight: 6, color: "#eab308" }} />
                 ) : (
                   <FolderOutlined style={{ marginRight: 6, color: "#eab308" }} />
@@ -120,7 +142,7 @@ export default function FilePanel() {
               </span>
             ),
             isLeaf: false,
-            children: [...dirChildren, ...fileNodes],
+            children: all,
           };
         };
         setTreeData([build("")]);
@@ -128,9 +150,8 @@ export default function FilePanel() {
       .catch(() => setTreeData([]))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vault?.id, watcherTick]);
+  }, [vault?.id, watcherTick, sortMode]);
 
-  // 搜索（FTS）
   useEffect(() => {
     if (!vault) return;
     const q = query.trim();
@@ -168,9 +189,18 @@ export default function FilePanel() {
   if (!vault) return null;
 
   return (
-    <div className="ob-file-panel">
+    <div className="ob-file-panel" style={{ width }}>
       <div className="ob-panel-header">
         <span>资源管理器</span>
+        <Segmented
+          size="small"
+          value={sortMode}
+          onChange={(v) => setSortMode(v as SortMode)}
+          options={[
+            { label: "123", value: "natural" },
+            { label: "A-Z", value: "name" },
+          ]}
+        />
       </div>
       <div style={{ padding: 6 }}>
         <Input
@@ -220,43 +250,15 @@ export default function FilePanel() {
         ) : loading && treeData.length === 0 ? (
           <Spin size="small" />
         ) : (
-          <>
-            <div className="ob-tree">
-              <Tree
-                treeData={treeData}
-                expandedKeys={expandedKeys}
-                onExpand={(keys) => setExpandedKeys(keys.map(String))}
-                onSelect={onSelect}
-                blockNode
-              />
-            </div>
-
-            <div
-              style={{
-                marginTop: 14,
-                marginBottom: 4,
-                fontSize: 11,
-                color: "var(--ob-text-faint)",
-                textTransform: "uppercase",
-                letterSpacing: 0.5,
-              }}
-            >
-              标签
-            </div>
-            <div>
-              {tags.length === 0 ? (
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  无标签
-                </Text>
-              ) : (
-                tags.slice(0, 40).map(([t, c]) => (
-                  <span key={t} className="ob-tag" onClick={() => setQuery(t)}>
-                    {t} · {c}
-                  </span>
-                ))
-              )}
-            </div>
-          </>
+          <div className="ob-tree">
+            <Tree
+              treeData={treeData}
+              expandedKeys={expandedKeys}
+              onExpand={(keys) => setExpandedKeys(keys.map(String))}
+              onSelect={onSelect}
+              blockNode
+            />
+          </div>
         )}
       </div>
     </div>

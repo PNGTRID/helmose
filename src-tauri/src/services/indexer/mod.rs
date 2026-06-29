@@ -6,6 +6,7 @@
 pub mod frontmatter;
 pub mod incremental;
 pub mod layers;
+pub mod projects;
 pub mod sections;
 pub mod tasks;
 pub mod wikilinks;

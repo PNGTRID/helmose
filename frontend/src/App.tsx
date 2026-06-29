@@ -1,6 +1,6 @@
 // Helmose · Obsidian 式工作台外壳
-// Ribbon + 左文件面板 + 中标签页编辑区 + 右反向链接面板 + 底状态栏
-import { useEffect, useState } from "react";
+// Ribbon + 左文件面板（可拖拽宽）+ 中标签页编辑区 + 右反向链接面板（可拖拽宽）+ 底状态栏
+import { useEffect, useState, type MouseEvent } from "react";
 import { Input, List, Modal, Spin, Typography } from "antd";
 import * as api from "./api";
 import { useVaultStore } from "./stores/vault";
@@ -20,7 +20,6 @@ import SettingsPage from "./pages/SettingsPage";
 
 const { Text } = Typography;
 
-/** 命令面板（Ctrl/Cmd+P）：模糊搜笔记 → 开 tab */
 function CommandPalette() {
   const open = useTabsStore((s) => s.paletteOpen);
   const setPalette = useTabsStore((s) => s.setPalette);
@@ -99,12 +98,14 @@ export default function App() {
   const filePanelOpen = useTabsStore((s) => s.filePanelOpen);
   const sidePanelOpen = useTabsStore((s) => s.sidePanelOpen);
 
+  const [fileWidth, setFileWidth] = useState(280);
+  const [sideWidth, setSideWidth] = useState(300);
+
   useEffect(() => {
     (async () => {
       await load();
       const v = useVaultStore.getState().vault;
       if (!v) return;
-      // 从未索引 → 直接索引；否则检测磁盘是否已变（vault 重构等），变化则自动追赶
       if (!v.last_indexed) {
         useVaultStore.getState().index();
       } else {
@@ -114,12 +115,10 @@ export default function App() {
     })();
   }, [load]);
 
-  // vault 就绪 → 启动文件监听（增量索引，幂等）
   useEffect(() => {
     if (vault) api.startWatcher(vault.id).catch(() => {});
   }, [vault?.id]);
 
-  // Ctrl/Cmd+P → 命令面板
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
@@ -131,6 +130,26 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // 拖拽改面板宽度（左：拖右移变宽；右：拖左移变宽）
+  const startResize = (which: "file" | "side") => (e: MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = which === "file" ? fileWidth : sideWidth;
+    const onMove = (ev: globalThis.MouseEvent) => {
+      const dx = ev.clientX - startX;
+      if (which === "file") setFileWidth(Math.max(180, Math.min(560, startW + dx)));
+      else setSideWidth(Math.max(180, Math.min(560, startW - dx)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
 
   if (loading) {
     return <Spin fullscreen tip="加载 Helmose…" />;
@@ -168,13 +187,15 @@ export default function App() {
   return (
     <div className="ob-app">
       <Ribbon />
-      {filePanelOpen && <FilePanel />}
+      {filePanelOpen && <FilePanel width={fileWidth} />}
+      {filePanelOpen && <div className="ob-resizer" onMouseDown={startResize("file")} />}
       <div className="ob-main">
         <TabBar />
         <div className="ob-content">{renderContent()}</div>
         <StatusBar />
       </div>
-      {sidePanelOpen && <SidePanel />}
+      {sidePanelOpen && <div className="ob-resizer" onMouseDown={startResize("side")} />}
+      {sidePanelOpen && <SidePanel width={sideWidth} />}
       <CommandPalette />
     </div>
   );

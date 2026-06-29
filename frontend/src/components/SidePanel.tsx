@@ -1,7 +1,7 @@
-// 右面板：大纲 + 反向链接（仅 active note tab 时填充）
+// 右面板：大纲 + 反向链接（仅 active note tab 时填充）。宽度由 App 传入（可拖拽）。
 import { useTabsStore } from "../stores/tabs";
 
-export default function SidePanel() {
+export default function SidePanel({ width }: { width: number }) {
   const tabs = useTabsStore((s) => s.tabs);
   const activeId = useTabsStore((s) => s.activeId);
   const outline = useTabsStore((s) => s.activeOutline);
@@ -11,7 +11,7 @@ export default function SidePanel() {
 
   if (!active || active.type !== "note") {
     return (
-      <div className="ob-side-panel">
+      <div className="ob-side-panel" style={{ width }}>
         <div className="ob-side-scroll">
           <div className="ob-side-title">大纲 / 反向链接</div>
           <div style={{ padding: "4px 12px", color: "var(--ob-text-faint)", fontSize: 12 }}>
@@ -23,7 +23,7 @@ export default function SidePanel() {
   }
 
   return (
-    <div className="ob-side-panel">
+    <div className="ob-side-panel" style={{ width }}>
       <div className="ob-side-scroll">
         <div className="ob-side-section">
           <div className="ob-side-title">大纲</div>

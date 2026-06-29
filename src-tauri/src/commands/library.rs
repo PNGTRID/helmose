@@ -329,7 +329,7 @@ pub fn get_graph_data(
     use crate::models::{GraphData, GraphEdge, GraphNode};
     use std::collections::{HashMap, HashSet};
 
-    let max = limit.unwrap_or(800) as usize;
+    let max = limit.unwrap_or(1000) as usize;
 
     // 所有已解析的正向链接
     let raw_edges: Vec<(String, String)> = db

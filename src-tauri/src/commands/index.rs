@@ -118,6 +118,7 @@ pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexSta
         .transaction(|tx| {
             tx.execute("DELETE FROM tasks WHERE vault_id = ?1", params![vault_id])?;
             tx.execute("DELETE FROM links WHERE vault_id = ?1", params![vault_id])?;
+            tx.execute("DELETE FROM projects WHERE vault_id = ?1", params![vault_id])?;
             tx.execute("DELETE FROM notes WHERE vault_id = ?1", params![vault_id])?;
 
             // 第一遍：所有 notes（先建立 notes 表——wikilink 可能指向遍历顺序
@@ -192,6 +193,25 @@ pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexSta
                     if dangling {
                         stats.dangling += 1;
                     }
+                }
+            }
+
+            // 第三遍：projects（frontmatter type=project 的笔记 → projects 表）
+            for (id, p) in &parsed {
+                if let Some(pi) = indexer::projects::extract(p) {
+                    tx.execute(
+                        "INSERT INTO projects (id,vault_id,note_id,name,status,is_mainline,home_rel_path) \
+                         VALUES (?1,?2,?3,?4,?5,0,?6)",
+                        params![
+                            uuid::Uuid::new_v4().to_string(),
+                            vault_id,
+                            id,
+                            pi.name,
+                            pi.status,
+                            pi.home_rel_path
+                        ],
+                    )?;
+                    stats.notes; // 项目数已含在 notes 统计里，不另计
                 }
             }
 
