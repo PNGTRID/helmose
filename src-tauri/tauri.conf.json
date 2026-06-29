@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.json",
+  "productName": "Helmose",
+  "version": "0.1.0",
+  "identifier": "com.helmose.app",
+  "build": {
+    "beforeDevCommand": "cd frontend && npm run dev",
+    "devUrl": "http://localhost:14200",
+    "beforeBuildCommand": "cd frontend && npm run build",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Helmose · 舵手",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 768,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Helmose - AI 人生知识库",
+    "longDescription": "把人生整理成人和智能体都能消费的清晰结构"
+  },
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
+    },
+    "opener": {}
+  }
+}

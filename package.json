@@ -1,0 +1,16 @@
+{
+  "name": "helmose",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Helmose - AI 驱动的人生知识库（舵手）",
+  "scripts": {
+    "dev": "frontend/node_modules/.bin/tauri dev",
+    "dev:web": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "build:app": "frontend/node_modules/.bin/tauri build",
+    "check": "cd src-tauri && cargo check",
+    "test": "cd src-tauri && cargo test",
+    "tauri": "frontend/node_modules/.bin/tauri"
+  },
+  "license": "MIT"
+}

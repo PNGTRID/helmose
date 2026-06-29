@@ -1,0 +1,29 @@
+# 依赖
+node_modules/
+frontend/node_modules/
+
+# 构建产物
+dist/
+frontend/dist/
+src-tauri/target/
+target/
+
+# Tauri 生成
+src-tauri/gen/
+
+# 数据库与本地数据
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
+
+# 日志
+*.log

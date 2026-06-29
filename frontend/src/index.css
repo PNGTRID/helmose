@@ -1,0 +1,506 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+/* ============================================================
+   Obsidian 浅色主题（CSS 变量）
+   ============================================================ */
+:root {
+  --ob-bg: #ffffff;
+  --ob-bg-mod: #f8f9fa;
+  --ob-bg-mod-hover: #eef0f3;
+  --ob-bg-mod-active: #e7e9ec;
+  --ob-border: #e5e5e5;
+  --ob-border-strong: #d4d4d4;
+  --ob-text: #333333;
+  --ob-text-muted: #6b7280;
+  --ob-text-faint: #9ca3af;
+  --ob-accent: #7c3aed;
+  --ob-accent-hover: #6d28d9;
+  --ob-accent-mod: #f3eeff;
+  --ob-tab-active-bg: #ffffff;
+  --ob-tab-bg: #f0f0f2;
+  --ob-radius: 6px;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", Roboto, sans-serif;
+  font-size: 14px;
+  color: var(--ob-text);
+  background: var(--ob-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   Obsidian 工作台外壳
+   ============================================================ */
+.ob-app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--ob-bg);
+}
+
+/* —— Ribbon：最左竖排图标条 —— */
+.ob-ribbon {
+  width: 48px;
+  flex-shrink: 0;
+  background: var(--ob-bg-mod);
+  border-right: 1px solid var(--ob-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 2px;
+}
+.ob-ribbon-brand {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+.ob-ribbon-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ob-radius);
+  color: var(--ob-text-muted);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+}
+.ob-ribbon-btn:hover {
+  background: var(--ob-bg-mod-hover);
+  color: var(--ob-text);
+}
+.ob-ribbon-btn.active {
+  color: var(--ob-accent);
+  background: var(--ob-accent-mod);
+}
+.ob-ribbon-spacer {
+  flex: 1;
+}
+
+/* —— 左面板（文件树 / 搜索 / 标签）—— */
+.ob-file-panel {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--ob-bg-mod);
+  border-right: 1px solid var(--ob-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ob-panel-header {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ob-text-muted);
+  border-bottom: 1px solid var(--ob-border);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.ob-panel-body {
+  flex: 1;
+  overflow: auto;
+  padding: 6px;
+}
+
+/* —— 主区 —— */
+.ob-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--ob-bg);
+}
+.ob-tabbar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: var(--ob-tab-bg);
+  border-bottom: 1px solid var(--ob-border);
+  padding: 0 6px;
+  gap: 2px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.ob-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  color: var(--ob-text-muted);
+  font-size: 13px;
+  max-width: 220px;
+  white-space: nowrap;
+}
+.ob-tab:hover {
+  background: var(--ob-bg-mod-hover);
+}
+.ob-tab.active {
+  background: var(--ob-tab-active-bg);
+  color: var(--ob-text);
+}
+.ob-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ob-tab-close {
+  font-size: 10px;
+  opacity: 0.4;
+  display: inline-flex;
+}
+.ob-tab-close:hover {
+  opacity: 1;
+  color: var(--ob-accent);
+}
+.ob-content {
+  flex: 1;
+  overflow: auto;
+  padding: 24px 40px;
+  min-width: 0;
+}
+.ob-statusbar {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  background: var(--ob-bg-mod);
+  border-top: 1px solid var(--ob-border);
+  font-size: 11px;
+  color: var(--ob-text-faint);
+  flex-shrink: 0;
+}
+
+/* —— 右面板（反向链接 / 大纲 / 标签）—— */
+.ob-side-panel {
+  width: 300px;
+  flex-shrink: 0;
+  background: var(--ob-bg-mod);
+  border-left: 1px solid var(--ob-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ob-side-scroll {
+  flex: 1;
+  overflow: auto;
+}
+.ob-side-section {
+  border-bottom: 1px solid var(--ob-border);
+  padding-bottom: 6px;
+}
+.ob-side-title {
+  padding: 10px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ob-text-faint);
+}
+.ob-side-link {
+  display: block;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: var(--ob-text);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.ob-side-link:hover {
+  background: var(--ob-bg-mod-hover);
+  border-left-color: var(--ob-accent);
+}
+.ob-side-link .ob-side-sub {
+  font-size: 11px;
+  color: var(--ob-text-faint);
+}
+.ob-outline-1 {
+  padding-left: 12px;
+  font-weight: 500;
+}
+.ob-outline-2 {
+  padding-left: 24px;
+}
+.ob-outline-3 {
+  padding-left: 36px;
+  color: var(--ob-text-muted);
+}
+
+/* —— 文件列表项（搜索结果）—— */
+.ob-file-item {
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ob-text);
+}
+.ob-file-item:hover {
+  background: var(--ob-bg-mod-hover);
+}
+.ob-file-item.active {
+  background: var(--ob-accent-mod);
+  color: var(--ob-accent);
+}
+.ob-file-sub {
+  font-size: 11px;
+  color: var(--ob-text-faint);
+}
+
+/* —— 标签 —— */
+.ob-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 2px;
+  font-size: 11px;
+  border-radius: 12px;
+  background: var(--ob-bg-mod-active);
+  color: var(--ob-text-muted);
+  cursor: pointer;
+}
+.ob-tag:hover {
+  background: var(--ob-accent-mod);
+  color: var(--ob-accent);
+}
+
+/* —— antd Tree 适配 Obsidian 风格 —— */
+.ob-tree .ant-tree {
+  font-size: 13px;
+  background: transparent;
+  color: var(--ob-text);
+}
+.ob-tree .ant-tree-treenode {
+  padding: 1px 0;
+}
+.ob-tree .ant-tree-node-content-wrapper {
+  flex: 1;
+  overflow: hidden;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.ob-tree .ant-tree-node-content-wrapper:hover {
+  background: var(--ob-bg-mod-hover);
+}
+.ob-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
+.ob-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
+  background: var(--ob-accent-mod) !important;
+  color: var(--ob-accent);
+}
+.ob-tree .ant-tree-switcher {
+  color: var(--ob-text-faint);
+}
+
+/* —— 滚动条（Obsidian 风格细滚动条）—— */
+.ob-app ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.ob-app ::-webkit-scrollbar-thumb {
+  background: var(--ob-border-strong);
+  border-radius: 4px;
+}
+.ob-app ::-webkit-scrollbar-thumb:hover {
+  background: #b8b8b8;
+}
+.ob-app ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* —— antd 输入框适配 —— */
+.ob-app .ant-input,
+.ob-app .ant-input-affix-wrapper {
+  background: var(--ob-bg);
+  border-color: var(--ob-border);
+}
+.ob-app .ant-input:focus,
+.ob-app .ant-input-affix-wrapper-focused {
+  border-color: var(--ob-accent);
+  box-shadow: 0 0 0 2px var(--ob-accent-mod);
+}
+
+/* ============================================================
+   markdown 预览（Obsidian 阅读视图排版）
+   ============================================================ */
+.md-preview {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--ob-text);
+  word-break: break-word;
+  max-width: 760px;
+}
+.md-preview h1,
+.md-preview h2,
+.md-preview h3,
+.md-preview h4 {
+  margin-top: 1.4em;
+  margin-bottom: 0.6em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.md-preview h1 {
+  font-size: 1.7em;
+  border-bottom: 1px solid var(--ob-border);
+  padding-bottom: 0.3em;
+}
+.md-preview h2 {
+  font-size: 1.4em;
+  border-bottom: 1px solid var(--ob-border);
+  padding-bottom: 0.3em;
+}
+.md-preview h3 {
+  font-size: 1.2em;
+}
+.md-preview h4 {
+  font-size: 1em;
+  color: var(--ob-text-muted);
+}
+.md-preview p {
+  margin: 0.7em 0;
+}
+.md-preview ul,
+.md-preview ol {
+  padding-left: 1.8em;
+  margin: 0.6em 0;
+}
+.md-preview li {
+  margin: 0.2em 0;
+}
+.md-preview blockquote {
+  margin: 0.8em 0;
+  padding: 0.2em 1em;
+  border-left: 4px solid var(--ob-accent);
+  background: var(--ob-accent-mod);
+  color: var(--ob-text-muted);
+}
+.md-preview code {
+  padding: 0.15em 0.4em;
+  background: var(--ob-bg-mod-active);
+  border-radius: 4px;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+.md-preview pre {
+  padding: 12px 14px;
+  background: var(--ob-bg-mod);
+  border: 1px solid var(--ob-border);
+  border-radius: 6px;
+  overflow: auto;
+}
+.md-preview pre code {
+  padding: 0;
+  background: none;
+}
+.md-preview table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  font-size: 0.92em;
+}
+.md-preview th,
+.md-preview td {
+  border: 1px solid var(--ob-border);
+  padding: 6px 12px;
+  text-align: left;
+}
+.md-preview th {
+  background: var(--ob-bg-mod);
+  font-weight: 600;
+}
+.md-preview img {
+  max-width: 100%;
+}
+.md-preview hr {
+  border: none;
+  border-top: 1px solid var(--ob-border);
+  margin: 1.4em 0;
+}
+.md-preview a {
+  color: var(--ob-accent);
+  text-decoration: none;
+}
+.md-preview a:hover {
+  text-decoration: underline;
+}
+.md-preview input[type="checkbox"] {
+  margin-right: 0.4em;
+}
+/* wikilink 可点链接（Obsidian 式紫色双下划线） */
+.md-preview .helmose-wikilink {
+  color: var(--ob-accent);
+  cursor: pointer;
+  text-decoration: underline dashed var(--ob-accent);
+  text-underline-offset: 2px;
+  background: var(--ob-accent-mod);
+  padding: 0 2px;
+  border-radius: 3px;
+}
+.md-preview .helmose-wikilink:hover {
+  background: var(--ob-accent);
+  color: #fff;
+}
+
+/* 全库搜索命中片段 */
+.md-snippet {
+  margin-top: 4px;
+  color: var(--ob-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.md-snippet b {
+  color: var(--ob-accent-hover);
+  background: var(--ob-accent-mod);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* 编辑器（Obsidian 风格等宽） */
+.ob-editor {
+  width: 100%;
+  max-width: 760px;
+  min-height: 70vh;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: "SFMono-Regular", Menlo, Consolas, "PingFang SC", monospace;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ob-text);
+  background: transparent;
+}
+.ob-editor:focus {
+  outline: none;
+}
+
+/* 空态 */
+.ob-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ob-text-faint);
+  font-size: 13px;
+  gap: 8px;
+}
