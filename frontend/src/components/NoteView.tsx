@@ -5,6 +5,7 @@ import { Button, Segmented, Space, Spin, message } from "antd";
 import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { marked } from "marked";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore, type OutlineItem } from "../stores/tabs";
@@ -139,23 +140,42 @@ export default function NoteView({ noteId }: { noteId: string }) {
       </div>
 
       {editing ? (
-        <div className="ob-editor-wrap">
-          <CodeMirror
-            value={draft}
-            onChange={(val) => setDraft(val)}
-            extensions={[markdown({ base: markdownLanguage })]}
-            theme="light"
-            basicSetup={{
-              lineNumbers: false,
-              foldGutter: true,
-              highlightActiveLine: false,
-              highlightActiveLineGutter: false,
-            }}
+        <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
+          <div className="ob-editor-wrap" style={{ flex: 1, minWidth: 0 }}>
+            <CodeMirror
+              value={draft}
+              onChange={(val) => setDraft(val)}
+              extensions={[markdown({ base: markdownLanguage })]}
+              theme="light"
+              basicSetup={{
+                lineNumbers: false,
+                foldGutter: true,
+                highlightActiveLine: false,
+                highlightActiveLineGutter: false,
+              }}
+              style={{
+                fontSize: 14,
+                fontFamily: '"SFMono-Regular", Menlo, Consolas, monospace',
+              }}
+            />
+          </div>
+          <div
+            className="ob-preview-pane"
             style={{
-              fontSize: 14,
-              fontFamily: '"SFMono-Regular", Menlo, Consolas, monospace',
+              flex: 1,
+              minWidth: 0,
+              overflow: "auto",
+              border: "1px solid var(--ob-border)",
+              borderRadius: 6,
+              padding: 20,
+              background: "var(--ob-bg)",
             }}
-          />
+          >
+            <div
+              className="md-preview"
+              dangerouslySetInnerHTML={{ __html: marked.parse(draft) as string }}
+            />
+          </div>
         </div>
       ) : (
         <div onClick={onPreviewClick}>
