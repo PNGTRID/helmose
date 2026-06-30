@@ -1,27 +1,19 @@
 // 日历页：antd <Calendar>，每个日期单元格标注当天笔记数，点击日期 → 右侧列出当天笔记
-// 复用 useAllNotesMeta（共享全量元数据 hook）+ useTabsStore.openNote（开笔记 tab）
+// 复用 useAllNotesMeta（共享全量元数据 hook）+ openNoteFromMeta（开笔记 tab）
 import { useMemo, useState } from "react";
 import { Alert, Badge, Calendar, Empty, List, Spin, Typography } from "antd";
 import type { Dayjs } from "dayjs";
-import dayjs from "dayjs";
 import { useVaultStore } from "../stores/vault";
-import { useTabsStore } from "../stores/tabs";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
+import { dateKey } from "../utils/date";
+import { openNoteFromMeta } from "../utils/note";
 import type { NoteMeta } from "../types";
 
 const { Text } = Typography;
 
-/** 把任意 date_iso 归一化为 "YYYY-MM-DD"（无效/空返回 null，跳过该笔记） */
-function dateKey(s: string | null): string | null {
-  if (!s) return null;
-  const d = dayjs(s);
-  return d.isValid() ? d.format("YYYY-MM-DD") : null;
-}
-
 export default function CalendarPage() {
   const vault = useVaultStore((s) => s.vault);
   const { notes, loading, error } = useAllNotesMeta();
-  const openNote = useTabsStore((s) => s.openNote);
   const [selected, setSelected] = useState<Dayjs | null>(null);
 
   // 按 date_iso 聚合：YYYY-MM-DD → 当天笔记列表（无有效日期的笔记不进日历）
@@ -113,14 +105,7 @@ export default function CalendarPage() {
             renderItem={(n) => (
               <List.Item
                 style={{ cursor: "pointer", padding: "6px 2px" }}
-                onClick={() =>
-                  openNote({
-                    id: n.id,
-                    title: n.title,
-                    file_name: n.file_name,
-                    rel_path: n.rel_path,
-                  })
-                }
+                onClick={() => openNoteFromMeta(n)}
               >
                 <List.Item.Meta
                   title={

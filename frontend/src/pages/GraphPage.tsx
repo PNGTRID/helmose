@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Empty, Spin, Typography } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
-import { useTabsStore } from "../stores/tabs";
+import { openNoteFromMeta } from "../utils/note";
 import type { GraphData, GraphNode } from "../types";
 import ForceGraph from "../components/ForceGraph";
 
@@ -13,7 +13,6 @@ const { Text } = Typography;
 export default function GraphPage() {
   const vault = useVaultStore((s) => s.vault);
   const watcherTick = useVaultStore((s) => s.watcherTick);
-  const openNote = useTabsStore((s) => s.openNote);
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -31,7 +30,8 @@ export default function GraphPage() {
   if (!vault) return null;
 
   const onSelect = (n: GraphNode) => {
-    openNote({ id: n.id, rel_path: n.label, file_name: n.label, title: n.label });
+    // GraphNode 只有 id+label，label 同时作 title/file_name/rel_path（与重构前映射一致）
+    openNoteFromMeta({ id: n.id, rel_path: n.label, file_name: n.label, title: n.label });
   };
 
   return (

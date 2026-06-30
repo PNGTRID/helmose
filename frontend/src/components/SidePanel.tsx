@@ -5,6 +5,7 @@ import { Spin } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
+import { openNoteFromMeta } from "../utils/note";
 import type { SearchResult, TagCount } from "../types";
 
 export default function SidePanel({ width }: { width: number }) {
@@ -12,7 +13,6 @@ export default function SidePanel({ width }: { width: number }) {
   const activeId = useTabsStore((s) => s.activeId);
   const outline = useTabsStore((s) => s.activeOutline);
   const backlinks = useTabsStore((s) => s.activeBacklinks);
-  const openNote = useTabsStore((s) => s.openNote);
   const vault = useVaultStore((s) => s.vault);
   const watcherTick = useVaultStore((s) => s.watcherTick);
   const active = tabs.find((t) => t.id === activeId);
@@ -97,14 +97,7 @@ export default function SidePanel({ width }: { width: number }) {
                   <div
                     key={i}
                     className="ob-side-link"
-                    onClick={() =>
-                      openNote({
-                        id: b.source.id,
-                        title: b.source.title,
-                        file_name: b.source.file_name,
-                        rel_path: b.source.rel_path,
-                      })
-                    }
+                    onClick={() => openNoteFromMeta(b.source)}
                   >
                     {b.source.title ?? b.source.file_name}
                     <div className="ob-side-sub">{b.source.rel_path}</div>
@@ -178,14 +171,7 @@ export default function SidePanel({ width }: { width: number }) {
                         key={r.id}
                         className="ob-file-item"
                         style={{ margin: "0 4px" }}
-                        onClick={() =>
-                          openNote({
-                            id: r.id,
-                            title: r.title,
-                            file_name: r.file_name,
-                            rel_path: r.rel_path,
-                          })
-                        }
+                        onClick={() => openNoteFromMeta(r)}
                       >
                         <div
                           style={{

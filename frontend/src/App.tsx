@@ -1,11 +1,10 @@
 // Helmose · Obsidian 式工作台外壳
 // Ribbon + 左文件面板（可拖拽宽）+ 中标签页编辑区 + 右反向链接面板（可拖拽宽）+ 底状态栏
 import { useEffect, useState, type MouseEvent } from "react";
-import { Input, List, Modal, Spin, Typography } from "antd";
+import { Spin } from "antd";
 import * as api from "./api";
 import { useVaultStore } from "./stores/vault";
 import { useTabsStore } from "./stores/tabs";
-import type { SearchResult } from "./types";
 import OnboardingPage from "./pages/OnboardingPage";
 import Ribbon from "./components/Ribbon";
 import FilePanel from "./components/FilePanel";
@@ -13,6 +12,7 @@ import SidePanel from "./components/SidePanel";
 import TabBar from "./components/TabBar";
 import StatusBar from "./components/StatusBar";
 import NoteView from "./components/NoteView";
+import CommandPalette from "./components/CommandPalette";
 import GraphPage from "./pages/GraphPage";
 import TasksPage from "./pages/TasksPage";
 import TodayPage from "./pages/TodayPage";
@@ -20,79 +20,6 @@ import ProjectsPage from "./pages/ProjectsPage";
 import CalendarPage from "./pages/CalendarPage";
 import JournalPage from "./pages/JournalPage";
 import SettingsPage from "./pages/SettingsPage";
-
-const { Text } = Typography;
-
-function CommandPalette() {
-  const open = useTabsStore((s) => s.paletteOpen);
-  const setPalette = useTabsStore((s) => s.setPalette);
-  const vault = useVaultStore((s) => s.vault);
-  const openNote = useTabsStore((s) => s.openNote);
-  const [q, setQ] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-
-  useEffect(() => {
-    if (!open) {
-      setQ("");
-      setResults([]);
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!vault) return;
-    const kw = q.trim();
-    if (!kw) {
-      setResults([]);
-      return;
-    }
-    const h = setTimeout(() => {
-      api.searchNotes(vault.id, kw, 20).then(setResults).catch(() => setResults([]));
-    }, 200);
-    return () => clearTimeout(h);
-  }, [q, vault?.id, open]);
-
-  const pick = (r: SearchResult) => {
-    openNote({ id: r.id, title: r.title, file_name: r.file_name, rel_path: r.rel_path });
-    setPalette(false);
-  };
-
-  return (
-    <Modal
-      open={open}
-      onCancel={() => setPalette(false)}
-      footer={null}
-      closable={false}
-      width={560}
-      styles={{ body: { padding: 12 } }}
-    >
-      <Input.Search
-        autoFocus
-        placeholder="跳转到笔记…（输入关键词，复用 FTS5 全库搜索）"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        style={{ marginBottom: 8 }}
-      />
-      <List
-        style={{ maxHeight: 360, overflow: "auto" }}
-        size="small"
-        dataSource={results}
-        locale={{ emptyText: q.trim() ? "无匹配" : "输入关键词搜索笔记" }}
-        renderItem={(r) => (
-          <List.Item style={{ cursor: "pointer" }} onClick={() => pick(r)}>
-            <List.Item.Meta
-              title={<Text ellipsis>{r.title ?? r.file_name}</Text>}
-              description={
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {r.rel_path}
-                </Text>
-              }
-            />
-          </List.Item>
-        )}
-      />
-    </Modal>
-  );
-}
 
 export default function App() {
   const { vault, loading, load } = useVaultStore();

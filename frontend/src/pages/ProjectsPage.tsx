@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Empty, Spin, Tag, Typography } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
-import { useTabsStore } from "../stores/tabs";
+import { openNoteFromMeta } from "../utils/note";
 import type { Project } from "../types";
 
 const { Text } = Typography;
@@ -27,7 +27,6 @@ const STATUS_COLOR: Record<string, string> = {
 export default function ProjectsPage() {
   const vault = useVaultStore((s) => s.vault);
   const watcherTick = useVaultStore((s) => s.watcherTick);
-  const openNote = useTabsStore((s) => s.openNote);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -107,7 +106,7 @@ export default function ProjectsPage() {
                   className="ob-file-item"
                   style={{ marginBottom: 6, background: "var(--ob-bg)", border: "1px solid var(--ob-border)" }}
                   onClick={() =>
-                    openNote({
+                    openNoteFromMeta({
                       id: p.note_id,
                       title: p.name,
                       file_name: p.name,

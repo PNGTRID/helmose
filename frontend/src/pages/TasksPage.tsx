@@ -2,10 +2,10 @@
 // 后端 get_tasks 已就绪（按 done 筛选），本页做分组展示与源笔记钻取。
 
 import { useEffect, useMemo, useState } from "react";
-import type { MouseEvent } from "react";
 import { Card, Drawer, Empty, List, Space, Spin, Tabs, Tag, Typography } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
+import { useWikilinkNavigation } from "../hooks/useWikilinkNavigation";
 import type { NoteContent, Task } from "../types";
 
 const { Text, Title } = Typography;
@@ -76,6 +76,14 @@ export default function TasksPage() {
   const [noteContent, setNoteContent] = useState<NoteContent | null>(null);
   const [loadingNote, setLoadingNote] = useState(false);
 
+  // Drawer 内 wikilink 跳转：点击 → 全库搜 target → 替换 Drawer 内容（与重构前一致）
+  const { handleClick: onDrawerClick } = useWikilinkNavigation({
+    onNavigate: async (hit) => {
+      const c = await api.getNoteContent(hit.id);
+      setNoteContent(c);
+    },
+  });
+
   const refresh = async () => {
     if (!vault) return;
     setLoading(true);
@@ -114,27 +122,6 @@ export default function TasksPage() {
     () => (tab === "open" ? dueGroups(tasks) : completedGroups(tasks)),
     [tasks, tab]
   );
-
-  // Drawer 内 wikilink 跳转：点击 → 全库搜 target → 替换 Drawer 内容
-  const onDrawerClick = async (e: MouseEvent<HTMLDivElement>) => {
-    if (!vault) return;
-    const el = (e.target as HTMLElement).closest(
-      ".helmose-wikilink"
-    ) as HTMLElement | null;
-    if (!el) return;
-    e.preventDefault();
-    const name = el.dataset.target;
-    if (!name) return;
-    try {
-      const hits = await api.searchNotes(vault.id, name, 1);
-      if (hits[0]) {
-        const c = await api.getNoteContent(hits[0].id);
-        setNoteContent(c);
-      }
-    } catch {
-      /* 忽略 */
-    }
-  };
 
   if (!vault) return null;
 

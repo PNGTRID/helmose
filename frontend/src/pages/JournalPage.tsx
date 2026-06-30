@@ -1,10 +1,10 @@
 // 日志页：列出 note_type 为 experience / log 的笔记（前端过滤 useAllNotesMeta）
-// 点击复用 useTabsStore.openNote → NoteView 打开编辑
+// 点击复用 openNoteFromMeta → NoteView 打开编辑
 import { useMemo } from "react";
 import { Alert, Empty, List, Spin, Tag, Typography } from "antd";
 import { useVaultStore } from "../stores/vault";
-import { useTabsStore } from "../stores/tabs";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
+import { openNoteFromMeta } from "../utils/note";
 
 const { Text } = Typography;
 
@@ -20,7 +20,6 @@ const TYPE_COLOR: Record<string, string> = {
 export default function JournalPage() {
   const vault = useVaultStore((s) => s.vault);
   const { notes, loading, error } = useAllNotesMeta();
-  const openNote = useTabsStore((s) => s.openNote);
 
   // 过滤 experience / log，按 date_iso 倒序（无日期的排末尾）
   const journal = useMemo(() => {
@@ -67,14 +66,7 @@ export default function JournalPage() {
             return (
               <List.Item
                 style={{ cursor: "pointer" }}
-                onClick={() =>
-                  openNote({
-                    id: n.id,
-                    title: n.title,
-                    file_name: n.file_name,
-                    rel_path: n.rel_path,
-                  })
-                }
+                onClick={() => openNoteFromMeta(n)}
               >
                 <List.Item.Meta
                   title={<span>{n.title ?? n.file_name}</span>}

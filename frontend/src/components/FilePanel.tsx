@@ -2,19 +2,12 @@
 // 顶部显示 Vault 名；树从根目录内容开始（顶层文件夹+根文件）；节点文字单行省略号。
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Empty, Input, Segmented, Spin, Tree } from "antd";
-import {
-  FileImageOutlined,
-  FileOutlined,
-  FileTextOutlined,
-  FolderOpenOutlined,
-  FolderOutlined,
-} from "@ant-design/icons";
+import { FolderOpenOutlined, FolderOutlined } from "@ant-design/icons";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
-import { useTabsStore } from "../stores/tabs";
+import { openNoteFromMeta } from "../utils/note";
+import { childDirs, fileIcon, makeCompare, type SortMode } from "../utils/tree";
 import type { NoteMeta, SearchResult } from "../types";
-
-type SortMode = "natural" | "name";
 
 interface TreeNode {
   key: string;
@@ -24,34 +17,9 @@ interface TreeNode {
   sortKey?: string;
 }
 
-function fileIcon(name: string): ReactNode {
-  const ext = name.split(".").pop()?.toLowerCase();
-  if (ext === "md" || ext === "markdown")
-    return <FileTextOutlined style={{ marginRight: 6, color: "#8b5cf6", flexShrink: 0 }} />;
-  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext ?? ""))
-    return <FileImageOutlined style={{ marginRight: 6, color: "#10b981", flexShrink: 0 }} />;
-  return <FileOutlined style={{ marginRight: 6, color: "var(--ob-text-faint)", flexShrink: 0 }} />;
-}
-
-function makeCompare(mode: SortMode) {
-  if (mode === "name") {
-    return (a: string, b: string) => a.localeCompare(b, "zh-Hans", { sensitivity: "base" });
-  }
-  return (a: string, b: string) =>
-    a.localeCompare(b, "zh-Hans", { numeric: true, sensitivity: "base" });
-}
-
-function childDirs(dir: string, dirs: string[]): string[] {
-  return dirs.filter((d) => {
-    if (dir === "") return d !== "" && !d.includes("/");
-    return d.startsWith(dir + "/") && !d.slice(dir.length + 1).includes("/");
-  });
-}
-
 export default function FilePanel({ width }: { width: number }) {
   const vault = useVaultStore((s) => s.vault);
   const watcherTick = useVaultStore((s) => s.watcherTick);
-  const openNote = useTabsStore((s) => s.openNote);
 
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
@@ -67,9 +35,13 @@ export default function FilePanel({ width }: { width: number }) {
 
   useEffect(() => {
     if (!vault) return;
+    // cancelled flag：watcherTick/sortMode 快速变化或组件卸载时，丢弃过期的 fetch 响应，
+    // 避免旧树覆盖新树（竞态）及卸载后无效 setState（与 useAllNotesMeta 一致）。
+    let cancelled = false;
     setLoading(true);
     Promise.all([api.listDirs(vault.id), api.listAllNotesMeta(vault.id)])
       .then(([dirs, notes]) => {
+        if (cancelled) return;
         fileMap.current.clear();
         const notesByDir = new Map<string, NoteMeta[]>();
         for (const n of notes) {
@@ -123,13 +95,26 @@ export default function FilePanel({ width }: { width: number }) {
           prev.length ? prev : childDirs("", dirs).map((d) => "dir:" + d)
         );
       })
-      .catch(() => setTreeData([]))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (cancelled) return;
+        setTreeData([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault?.id, watcherTick, sortMode]);
 
   useEffect(() => {
     if (!vault) return;
+    // cancelled flag：query 快速变化或组件卸载时，丢弃过期的 fetch 响应，
+    // 避免「旧 query 的慢搜索」覆盖「新 query/清空」的结果（竞态）及卸载后无效 setState。
+    // 关键：then/catch/finally 都要 if(!cancelled) 守卫——尤其 finally 的 setSearching(false)，
+    // 否则旧 in-flight 收尾会把新 query 的 searching 误置 false（卡 loading）。
+    let cancelled = false;
     const q = query.trim();
     if (!q) {
       setResults([]);
@@ -139,11 +124,20 @@ export default function FilePanel({ width }: { width: number }) {
     const h = setTimeout(() => {
       api
         .searchNotes(vault.id, q, 50)
-        .then(setResults)
-        .catch(() => setResults([]))
-        .finally(() => setSearching(false));
+        .then((res) => {
+          if (!cancelled) setResults(res);
+        })
+        .catch(() => {
+          if (!cancelled) setResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
     }, 300);
-    return () => clearTimeout(h);
+    return () => {
+      cancelled = true;
+      clearTimeout(h);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault?.id, query]);
 
@@ -152,14 +146,7 @@ export default function FilePanel({ width }: { width: number }) {
     if (!k) return;
     if (k.startsWith("file:")) {
       const note = fileMap.current.get(k);
-      if (note) {
-        openNote({
-          id: note.id,
-          title: note.title,
-          file_name: note.file_name,
-          rel_path: note.rel_path,
-        });
-      }
+      if (note) openNoteFromMeta(note);
     } else if (k.startsWith("dir:")) {
       // 点击文件夹名也切换展开/折叠（不只点小三角）
       setExpandedKeys((prev) =>
@@ -207,14 +194,7 @@ export default function FilePanel({ width }: { width: number }) {
               <div
                 key={r.id}
                 className="ob-file-item"
-                onClick={() =>
-                  openNote({
-                    id: r.id,
-                    title: r.title,
-                    file_name: r.file_name,
-                    rel_path: r.rel_path,
-                  })
-                }
+                onClick={() => openNoteFromMeta(r)}
               >
                 <span style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%" }}>
                   {fileIcon(r.file_name)}

@@ -1,36 +1,20 @@
-// 单笔记视图（Obsidian 阅读视图 + CodeMirror 编辑模式）：主内容区渲染
+// 单笔记视图（容器）：加载内容/反链 + 阅读·编辑切换 + outline/backlink 同步。
+// 编辑态组合 <NoteEditor>，阅读态组合 <NotePreview>。从 205 行胖组件重构为协调者。
 import { useEffect, useState } from "react";
-import type { MouseEvent } from "react";
-import { Button, Segmented, Space, Spin, message } from "antd";
-import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
-import CodeMirror from "@uiw/react-codemirror";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { marked } from "marked";
+import { Segmented, Spin } from "antd";
 import * as api from "../api";
-import { useVaultStore } from "../stores/vault";
-import { useTabsStore, type OutlineItem } from "../stores/tabs";
+import { useTabsStore } from "../stores/tabs";
+import { extractOutline } from "../utils/note";
+import NoteEditor from "./NoteEditor";
+import NotePreview from "./NotePreview";
 import type { NoteContent } from "../types";
 
-/** 从 raw_content 提取 H1-H3 大纲（供右面板） */
-function extractOutline(raw: string): OutlineItem[] {
-  const out: OutlineItem[] = [];
-  for (const line of raw.split("\n")) {
-    const m = line.match(/^(#{1,3})\s+(.+)$/);
-    if (m) out.push({ level: m[1].length, text: m[2].trim() });
-  }
-  return out;
-}
-
 export default function NoteView({ noteId }: { noteId: string }) {
-  const vault = useVaultStore((s) => s.vault);
-  const openNote = useTabsStore((s) => s.openNote);
   const setActiveNoteData = useTabsStore((s) => s.setActiveNoteData);
 
   const [content, setContent] = useState<NoteContent | null>(null);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -47,45 +31,14 @@ export default function NoteView({ noteId }: { noteId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId]);
 
-  // wikilink 跳转 → 开新 tab
-  const onPreviewClick = async (e: MouseEvent<HTMLDivElement>) => {
-    if (!vault) return;
-    const el = (e.target as HTMLElement).closest(".helmose-wikilink") as HTMLElement | null;
-    if (!el) return;
-    e.preventDefault();
-    const name = el.dataset.target;
-    if (!name) return;
-    try {
-      const hits = await api.searchNotes(vault.id, name, 1);
-      if (hits[0]) {
-        openNote({
-          id: hits[0].id,
-          title: hits[0].title,
-          file_name: hits[0].file_name,
-          rel_path: hits[0].rel_path,
-        });
-      }
-    } catch {
-      /* 忽略 */
-    }
-  };
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      const updated = await api.saveNoteContent(noteId, draft);
-      setContent(updated);
-      setActiveNoteData(
-        extractOutline(updated.raw_content),
-        useTabsStore.getState().activeBacklinks
-      );
-      setEditing(false);
-      message.success("已保存（自动备份到 .helmose/backup）");
-    } catch (e) {
-      message.error(`保存失败：${e}`);
-    } finally {
-      setSaving(false);
-    }
+  // NoteEditor 保存成功回调：更新内容 + 同步 outline（反链维持现有）+ 退回阅读态
+  const onSave = (updated: NoteContent) => {
+    setContent(updated);
+    setActiveNoteData(
+      extractOutline(updated.raw_content),
+      useTabsStore.getState().activeBacklinks
+    );
+    setEditing(false);
   };
 
   if (loading || !content) {
@@ -119,86 +72,25 @@ export default function NoteView({ noteId }: { noteId: string }) {
         >
           {content.rel_path}
         </span>
-        <Space>
-          <Segmented
-            value={editing ? "edit" : "preview"}
-            onChange={(v) => {
-              if (String(v) === "edit") {
-                setDraft(content.raw_content);
-                setEditing(true);
-              } else {
-                setEditing(false);
-              }
-            }}
-            options={[
-              { label: "阅读", value: "preview" },
-              { label: "编辑", value: "edit" },
-            ]}
-          />
-          {editing && (
-            <>
-              <Button size="small" icon={<CloseOutlined />} onClick={() => setEditing(false)}>
-                取消
-              </Button>
-              <Button
-                size="small"
-                type="primary"
-                icon={<SaveOutlined />}
-                loading={saving}
-                onClick={save}
-              >
-                保存
-              </Button>
-            </>
-          )}
-        </Space>
+        <Segmented
+          value={editing ? "edit" : "preview"}
+          onChange={(v) => setEditing(String(v) === "edit")}
+          options={[
+            { label: "阅读", value: "preview" },
+            { label: "编辑", value: "edit" },
+          ]}
+        />
       </div>
 
       {editing ? (
-        <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
-          <div className="ob-editor-wrap" style={{ flex: 1, minWidth: 0 }}>
-            <CodeMirror
-              value={draft}
-              onChange={(val) => setDraft(val)}
-              extensions={[markdown({ base: markdownLanguage })]}
-              theme="light"
-              basicSetup={{
-                lineNumbers: false,
-                foldGutter: true,
-                highlightActiveLine: false,
-                highlightActiveLineGutter: false,
-              }}
-              style={{
-                fontSize: 14,
-                fontFamily: '"SFMono-Regular", Menlo, Consolas, monospace',
-              }}
-            />
-          </div>
-          <div
-            className="ob-preview-pane"
-            style={{
-              flex: 1,
-              minWidth: 0,
-              overflow: "auto",
-              border: "1px solid var(--ob-border)",
-              borderRadius: 6,
-              padding: 20,
-              background: "var(--ob-bg)",
-            }}
-          >
-            <div
-              className="md-preview"
-              dangerouslySetInnerHTML={{ __html: marked.parse(draft) as string }}
-            />
-          </div>
-        </div>
+        <NoteEditor
+          noteId={noteId}
+          rawContent={content.raw_content}
+          onSave={onSave}
+          onCancel={() => setEditing(false)}
+        />
       ) : (
-        <div onClick={onPreviewClick}>
-          <div
-            className="md-preview"
-            dangerouslySetInnerHTML={{ __html: content.html }}
-          />
-        </div>
+        <NotePreview html={content.html} />
       )}
     </div>
   );
