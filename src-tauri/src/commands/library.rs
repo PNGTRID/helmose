@@ -8,31 +8,13 @@
 
 use crate::models::{NoteContent, NoteMeta};
 use crate::services::Database;
+use crate::utils::exclude::is_excluded;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::params;
 use std::path::{Path, PathBuf};
 use tauri::State;
 use walkdir::WalkDir;
-
-/// 与 index.rs 一致的排除目录（隐藏目录 + 体积大的备份目录）
-const EXCLUDE_DIRS: &[&str] = &["6-原始资料", "专家团"];
-
-/// 路径是否落在排除目录下（隐藏目录 + 备份大目录）
-fn is_excluded(path: &Path, root: &Path) -> bool {
-    let rel = path.strip_prefix(root).unwrap_or(path);
-    for comp in rel.components() {
-        if let Some(name) = comp.as_os_str().to_str() {
-            if name.starts_with('.') {
-                return true;
-            }
-            if EXCLUDE_DIRS.contains(&name) {
-                return true;
-            }
-        }
-    }
-    false
-}
 
 fn vault_root(vault_id: &str, db: &Database) -> Result<PathBuf, String> {
     let path = db
@@ -218,14 +200,13 @@ pub fn get_note_content(
     })
 }
 
-/// 保存笔记内容（写回 vault md 原文 + 自动备份 + 增量重索引）。
+/// 保存笔记内容核心逻辑（可被集成测试直接调用，绕过 Tauri State）。
 /// 写前把原文件备份到 <vault>/.helmose/backup/（隐藏目录，不索引），保护原文。
-/// 注：本命令写 vault 原文——用户明确点「保存」触发，带备份保护。
-#[tauri::command]
-pub fn save_note_content(
-    note_id: String,
-    content: String,
-    db: State<'_, Database>,
+/// 注：本函数写 vault 原文——用户明确点「保存」触发，带备份保护。
+pub fn save_note_content_inner(
+    note_id: &str,
+    content: &str,
+    db: &Database,
 ) -> Result<NoteContent, String> {
     use crate::services::indexer::incremental;
 
@@ -264,21 +245,32 @@ pub fn save_note_content(
     if let Some(parent) = abs.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(&abs, &content).map_err(|e| e.to_string())?;
+    std::fs::write(&abs, content).map_err(|e| e.to_string())?;
 
     // 4. 增量重索引（notes + FTS + tasks + links 同步更新）
-    incremental::upsert_rel(db.inner(), &vault_id, &rel_path, &content, Some(&abs))
+    incremental::upsert_rel(db, &vault_id, &rel_path, content, Some(&abs))
         .map_err(|e| e.to_string())?;
 
     // 5. 返回最新 NoteContent（重新渲染 HTML）
-    let html = render_markdown(&content);
+    let html = render_markdown(content);
     Ok(NoteContent {
-        id: note_id,
+        id: note_id.to_string(),
         rel_path,
         title: None, // 编辑后标题可能变，前端用 selected 显示
-        raw_content: content,
+        raw_content: content.to_string(),
         html,
     })
+}
+
+/// 保存笔记内容（写回 vault md 原文 + 自动备份 + 增量重索引）。
+/// 命令壳：State 解包 + 转调 save_note_content_inner，行为零变化。
+#[tauri::command]
+pub fn save_note_content(
+    note_id: String,
+    content: String,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    save_note_content_inner(&note_id, &content, db.inner())
 }
 
 /// 反向链接：哪些笔记的 [[wikilink]] 指向了本笔记（links.target_note_id = note_id）。
@@ -486,5 +478,94 @@ mod tests {
         let html = render_markdown("见 [[袁锐钦]]");
         assert!(html.contains("helmose-wikilink"));
         assert!(html.contains("data-target=\"袁锐钦\""));
+    }
+
+    /// save_note_content 集成测试：写回 vault → .helmose/backup 备份 → FTS 命中新内容 → raw_content 更新。
+    /// 用临时 vault（非 ~/wiki），用户明确「保存」动作写原文，符合铁律。
+    #[test]
+    fn save_note_content_backs_up_and_reindexes() {
+        use crate::commands::index::index_vault_inner;
+        use crate::commands::vault::add_vault_inner;
+        use crate::models::VaultInput;
+
+        let vid = uuid::Uuid::new_v4().to_string();
+        let vault_dir = std::env::temp_dir().join(format!(
+            "helmose_lib_vault_{}_{}",
+            std::process::id(),
+            vid
+        ));
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let db_path =
+            std::env::temp_dir().join(format!("helmose_lib_db_{}_{}.db", std::process::id(), vid));
+        let db = Database::new(db_path).unwrap();
+        db.init_schema().unwrap();
+
+        // 旧内容（含「旧关键词」）
+        let note_path = vault_dir.join("note.md");
+        std::fs::write(&note_path, "# 标题\n\n旧关键词\n").unwrap();
+
+        // add_vault + 全量索引
+        let v = add_vault_inner(
+            VaultInput {
+                name: "t".into(),
+                root_path: vault_dir.to_string_lossy().to_string(),
+                is_obsidian_shared: false,
+            },
+            &db,
+        )
+        .unwrap();
+        index_vault_inner(&v.id, &db).unwrap();
+
+        // 取 note_id
+        let note_id: String = db
+            .sqlite()
+            .query_row(
+                "SELECT id FROM notes WHERE vault_id = ?1 AND file_name = 'note.md'",
+                params![&v.id],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .unwrap();
+
+        // 保存新内容（含「积分商城」新词）
+        let new_content = "# 标题\n\n改为积分商城新词\n";
+        save_note_content_inner(&note_id, new_content, &db).unwrap();
+
+        // 1. .helmose/backup/ 下应有备份文件
+        let backup_dir = vault_dir.join(".helmose").join("backup");
+        let backup_count = std::fs::read_dir(&backup_dir)
+            .map(|it| it.count())
+            .unwrap_or(0);
+        assert!(backup_count > 0, ".helmose/backup/ 应有备份文件");
+
+        // 2. vault 原文已更新
+        let on_disk = std::fs::read_to_string(&note_path).unwrap();
+        assert!(on_disk.contains("积分商城"), "vault 原文应更新为新内容");
+
+        // 3. FTS 命中新内容
+        let fts_hit: i64 = db
+            .sqlite()
+            .query_row(
+                "SELECT COUNT(*) FROM notes_fts WHERE notes_fts MATCH '\"积分商城\"'",
+                &[],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(0);
+        assert!(fts_hit > 0, "FTS 应命中新内容「积分商城」");
+
+        // 4. notes.raw_content 已更新（save 后 note id = 新 content_hash，按 file_name 重查）
+        let raw: String = db
+            .sqlite()
+            .query_row(
+                "SELECT raw_content FROM notes WHERE vault_id = ?1 AND file_name = 'note.md'",
+                params![&v.id],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .unwrap_or_default();
+        assert!(raw.contains("积分商城"), "notes.raw_content 应更新为新内容");
+
+        let _ = std::fs::remove_dir_all(&vault_dir);
     }
 }

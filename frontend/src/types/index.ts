@@ -145,3 +145,11 @@ export interface Project {
   home_rel_path: string | null;
   last_activity: string | null;
 }
+
+/** 脚手架生成统计（onboarding「创建知识库」） */
+export interface ScaffoldStats {
+  root_path: string;
+  dirs_created: number;
+  templates_created: number;
+  root_files_created: number;
+}

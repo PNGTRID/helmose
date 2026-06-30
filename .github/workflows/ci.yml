@@ -1,0 +1,151 @@
+# Helmose CI —— PR / 推送 main 时跑后端 + 前端客观裁判，任一失败阻断合并。
+# 项目当前无 git remote：本文件写好待推 GitHub 启用（本地可用 actionlint 校语法）。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支新推送取消旧的在跑 CI，省额度
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  backend:
+    name: Backend · ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src-tauri
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # Tauri v2 在 Linux 编译需要 webkit2gtk / gtk 等系统依赖（macOS 用系统 WKWebView 无需）
+      - name: Install Linux system deps (Tauri)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo check
+        run: cargo check --all-targets
+
+      # index_real_wiki_smoke 标 #[ignore]（依赖本机 ~/wiki，CI 无此路径）→ cargo test 自动跳过
+      - name: cargo test
+        run: cargo test
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (tsc -b && vite build)
+        run: pnpm build
+
+      - name: Test (vitest run)
+        run: pnpm test
+
+  # 覆盖率报告：只产出 lcov artifact，不设门槛、不阻断 PR（Req 4.2）
+  coverage:
+    name: Coverage (report only · non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- Rust 覆盖率（cargo-llvm-cov）----------
+      - name: Install Rust (stable + llvm-tools)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Install Linux system deps (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            patchelf
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      # --workspace 覆盖所有 target；#[ignore] 的 index_real_wiki_smoke 默认不计入
+      - name: Rust coverage → lcov
+        working-directory: src-tauri
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - name: Upload Rust coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-rust-lcov
+          path: src-tauri/lcov.info
+          if-no-files-found: warn
+
+      # ---------- 前端覆盖率（vitest + @vitest/coverage-v8）----------
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Frontend coverage → lcov
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test:coverage
+      - name: Upload frontend coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-frontend-lcov
+          path: frontend/coverage/lcov.info
+          if-no-files-found: warn

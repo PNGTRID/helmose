@@ -2,15 +2,13 @@
 
 use crate::services::indexer;
 use crate::services::Database;
+use crate::utils::exclude::is_excluded;
 use rusqlite::params;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::State;
 use walkdir::WalkDir;
-
-/// 体积大的备份目录，默认不索引（提速；核心内容约 1.5k 文件）
-const EXCLUDE_DIRS: &[&str] = &["6-原始资料", "专家团"];
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct IndexStats {
@@ -19,22 +17,6 @@ pub struct IndexStats {
     pub wikilinks: usize,
     pub dangling: usize,
     pub elapsed_ms: u64,
-}
-
-/// 路径是否在排除目录下（隐藏目录 + 备份大目录）
-fn is_excluded(path: &Path, root: &Path) -> bool {
-    let rel = path.strip_prefix(root).unwrap_or(path);
-    for comp in rel.components() {
-        if let Some(name) = comp.as_os_str().to_str() {
-            if name.starts_with('.') {
-                return true;
-            }
-            if EXCLUDE_DIRS.contains(&name) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 fn vault_root(vault_id: &str, db: &Database) -> Result<PathBuf, String> {
@@ -50,11 +32,10 @@ fn vault_root(vault_id: &str, db: &Database) -> Result<PathBuf, String> {
         .map(PathBuf::from)
 }
 
-/// 全量索引一个 vault
-#[tauri::command]
-pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexStats, String> {
+/// 全量索引核心逻辑（可被集成测试直接调用，绕过 Tauri State）。行为零变化。
+pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, String> {
     let started = std::time::Instant::now();
-    let root = vault_root(&vault_id, db.inner())?;
+    let root = vault_root(vault_id, db)?;
 
     // 更新状态为 scanning
     let _ = db.sqlite().execute(
@@ -62,8 +43,8 @@ pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexSta
         params![vault_id],
     );
 
-    // 1. 遍历 + 解析
-    let mut parsed: Vec<(String, indexer::ParsedNote)> = Vec::new();
+    // 1. 遍历 + 解析（id 延后到碰撞消歧后生成）
+    let mut parsed: Vec<indexer::ParsedNote> = Vec::new();
     for entry in WalkDir::new(&root)
         .into_iter()
         .filter_entry(|e| !is_excluded(e.path(), &root))
@@ -92,14 +73,37 @@ pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexSta
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let p = indexer::parse_file(&rel_str, &content, mtime);
-        let id = uuid::Uuid::new_v4().to_string();
-        parsed.push((id, p));
+        parsed.push(indexer::parse_file(&rel_str, &content, mtime));
     }
 
-    // 2. 建 file_stem -> note_id（用于 wikilink 悬挂判定）
+    // 2. note id = content_hash（稳定，移动不变）；同 vault 内 hash 碰撞（重复内容）
+    //    加 rel_path 短哈希消歧；content_hash 列始终存纯 hash（「同内容」判定用）。
+    //    ⚠ 已知边缘：碰撞双方其一被删后再次全量索引，剩余方会退出碰撞态，
+    //    id 从 hash#short 回到纯 hash（极罕见；无碰撞态完全稳定）。行为由
+    //    `index_vault_inner_collision_disambiguates` 回归测试固化。
+    let mut hash_count: HashMap<String, usize> = HashMap::new();
+    for p in &parsed {
+        if let Some(h) = &p.content_hash {
+            *hash_count.entry(h.clone()).or_insert(0) += 1;
+        }
+    }
+    let with_id: Vec<(String, &indexer::ParsedNote)> = parsed
+        .iter()
+        .map(|p| {
+            let id = match &p.content_hash {
+                Some(h) if *hash_count.get(h).unwrap_or(&0) > 1 => {
+                    format!("{}#{}", h, crate::utils::hash::short_hash(&p.rel_path))
+                }
+                Some(h) => h.clone(),
+                None => uuid::Uuid::new_v4().to_string(),
+            };
+            (id, p)
+        })
+        .collect();
+
+    // 3. 建 file_stem -> note_id（用于 wikilink 悬挂判定）
     let mut stem_to_id: HashMap<String, String> = HashMap::new();
-    for (id, p) in &parsed {
+    for (id, p) in &with_id {
         let stem = Path::new(&p.file_name)
             .file_stem()
             .and_then(|s| s.to_str())
@@ -123,7 +127,7 @@ pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexSta
 
             // 第一遍：所有 notes（先建立 notes 表——wikilink 可能指向遍历顺序
             // 上靠后的 note，必须先全部写入，否则 INSERT links 时外键失败）
-            for (id, p) in &parsed {
+            for (id, p) in &with_id {
                 let tags_json = serde_json::to_string(&p.tags).unwrap_or_else(|_| "[]".into());
                 let fm_json =
                     serde_json::to_string(&p.frontmatter).unwrap_or_else(|_| "{}".into());
@@ -151,7 +155,7 @@ pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexSta
             }
 
             // 第二遍：tasks + links（此时所有 notes 已在表，外键约束满足）
-            for (id, p) in &parsed {
+            for (id, p) in &with_id {
                 for t in &p.tasks {
                     let tid = uuid::Uuid::new_v4().to_string();
                     let created = crate::utils::dates::now_iso8601();
@@ -197,7 +201,7 @@ pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexSta
             }
 
             // 第三遍：projects（frontmatter type=project 的笔记 → projects 表）
-            for (id, p) in &parsed {
+            for (id, p) in &with_id {
                 if let Some(pi) = indexer::projects::extract(p) {
                     tx.execute(
                         "INSERT INTO projects (id,vault_id,note_id,name,status,is_mainline,home_rel_path) \
@@ -242,6 +246,12 @@ pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexSta
     Ok(stats)
 }
 
+/// 全量索引一个 vault（Tauri 命令壳：仅 State 解包 + 转调 index_vault_inner，行为零变化）
+#[tauri::command]
+pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexStats, String> {
+    index_vault_inner(&vault_id, db.inner())
+}
+
 /// 启动文件监听（增量索引）。前端 vault 就绪后调用，幂等（v0.1 单 vault）。
 #[tauri::command]
 pub fn start_watcher(
@@ -254,11 +264,9 @@ pub fn start_watcher(
     Ok(())
 }
 
-/// 检测是否需要重新索引：磁盘 md 数与 notes 表数差异 >10%，或 notes 为 0。
-/// 用于启动时自动追赶「磁盘已变但索引未更新」（如 vault 重构后没重新索引）。
-#[tauri::command]
-pub fn should_reindex(vault_id: String, db: State<'_, Database>) -> Result<bool, String> {
-    let root = vault_root(&vault_id, db.inner())?;
+/// 检测是否需要重新索引的核心逻辑（可被集成测试直接调用）。行为零变化。
+pub fn should_reindex_inner(vault_id: &str, db: &Database) -> Result<bool, String> {
+    let root = vault_root(vault_id, db)?;
     let mut disk = 0usize;
     for entry in WalkDir::new(&root)
         .into_iter()
@@ -288,4 +296,272 @@ pub fn should_reindex(vault_id: String, db: State<'_, Database>) -> Result<bool,
     }
     let diff = (disk as f64 - notes_count as f64).abs() / notes_count as f64;
     Ok(diff > 0.1)
+}
+
+/// 检测是否需要重新索引：磁盘 md 数与 notes 表数差异 >10%，或 notes 为 0。
+/// 用于启动时自动追赶「磁盘已变但索引未更新」（如 vault 重构后没重新索引）。
+#[tauri::command]
+pub fn should_reindex(vault_id: String, db: State<'_, Database>) -> Result<bool, String> {
+    should_reindex_inner(&vault_id, db.inner())
+}
+
+// ============================================================
+// 集成测试：index_vault_inner 写库全链路（真 SQLite + 真临时 FS，不 mock）
+// 复用 incremental::tests::setup 模式；不依赖 ~/wiki（pid+uuid 唯一临时目录隔离）
+// ============================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 构造临时 vault + 临时 DB + 注册 vault（复用 incremental::tests::setup 模式）。
+    /// pid+uuid 唯一目录隔离，不依赖 ~/wiki。
+    fn setup() -> (String, std::path::PathBuf, Database) {
+        let vid = uuid::Uuid::new_v4().to_string();
+        let tag = format!("{}_{}", std::process::id(), vid);
+        let vault_dir = std::env::temp_dir().join(format!("helmose_idx_vault_{}", tag));
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let db_path = std::env::temp_dir().join(format!("helmose_idx_db_{}.db", tag));
+        let db = Database::new(db_path).unwrap();
+        db.init_schema().unwrap();
+        db.sqlite()
+            .execute(
+                "INSERT INTO vaults (id,name,root_path,created_at,indexing_state,is_obsidian_shared,exclude_patterns) \
+                 VALUES (?1,'t',?2,'2026-01-01T00:00:00Z','idle',0,'[]')",
+                params![vid, vault_dir.to_string_lossy()],
+            )
+            .unwrap();
+        (vid, vault_dir, db)
+    }
+
+    /// 写 3 个 md：① type:project frontmatter；② 普通笔记（stem=目标，供 wikilink 命中）；
+    /// ③ 含 checkbox + [[目标]] wikilink。
+    fn seed(vault_dir: &std::path::Path) {
+        std::fs::write(
+            vault_dir.join("项目A.md"),
+            "---\ntitle: 项目A\ntype: project\ntags: [project-status:active]\n---\n# 项目A\n项目主页\n",
+        )
+        .unwrap();
+        std::fs::write(
+            vault_dir.join("目标.md"),
+            "# 目标\n描述目标的普通笔记。\n",
+        )
+        .unwrap();
+        std::fs::write(
+            vault_dir.join("日志.md"),
+            "# 今日日志\n\n- [ ] 写集成测试\n- [ ] 跑通 cargo test\n\n见 [[目标]]。\n",
+        )
+        .unwrap();
+    }
+
+    /// index_vault_inner 写库全链路：notes.id 64 位 hex / content_hash 非空 /
+    /// projects 命中 type=project / tasks 有行 / links 外键有效。
+    #[test]
+    fn index_vault_inner_writes_full_pipeline() {
+        let (vid, vault_dir, db) = setup();
+        seed(&vault_dir);
+
+        let stats = index_vault_inner(&vid, &db).expect("index_vault_inner 应成功");
+        assert_eq!(stats.notes, 3, "应索引 3 篇笔记");
+
+        let sqlite = db.sqlite();
+
+        // 1. notes.id 全为 64 位 hex（content_hash；3 个不同内容无碰撞 → 纯 hash）
+        let ids: Vec<String> = sqlite
+            .query_map(
+                "SELECT id FROM notes WHERE vault_id = ?1",
+                params![vid],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
+        assert!(!ids.is_empty(), "notes 表应有行");
+        for id in &ids {
+            assert_eq!(id.len(), 64, "id 应为 64 位 hex（content_hash），实际 {}", id);
+            assert!(
+                id.chars().all(|c| c.is_ascii_hexdigit()),
+                "id 应全为 hex 字符，实际 {}",
+                id
+            );
+        }
+
+        // 2. content_hash 列非 null（NULL 计数应为 0）
+        let hash_null: i64 = sqlite
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE vault_id = ?1 AND content_hash IS NULL",
+                params![vid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(1);
+        assert_eq!(hash_null, 0, "content_hash 不应有 NULL");
+
+        // 3. projects 表命中 type=project（① 项目A）
+        let projects: i64 = sqlite
+            .query_row(
+                "SELECT COUNT(*) FROM projects WHERE vault_id = ?1",
+                params![vid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(0);
+        assert!(projects >= 1, "projects 表应 >=1，实际 {}", projects);
+
+        // 4. tasks 表有行（③ 两个 checkbox）
+        let tasks: i64 = sqlite
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE vault_id = ?1",
+                params![vid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(0);
+        assert!(tasks >= 1, "tasks 表应有行，实际 {}", tasks);
+
+        // 5. links 表有行且 target_note_id 外键有效（③ [[目标]] → ② 目标.md）
+        let links_total: i64 = sqlite
+            .query_row(
+                "SELECT COUNT(*) FROM links WHERE vault_id = ?1",
+                params![vid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(0);
+        assert!(links_total >= 1, "links 表应有行");
+
+        // 非悬挂（已解析）链接至少 1 条
+        let links_resolved: i64 = sqlite
+            .query_row(
+                "SELECT COUNT(*) FROM links WHERE vault_id = ?1 AND target_note_id IS NOT NULL",
+                params![vid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(0);
+        assert!(
+            links_resolved >= 1,
+            "应有已解析（非悬挂）的 wikilink，实际 {}",
+            links_resolved
+        );
+
+        // 外键有效性：非悬挂链接的 target_note_id 必须在 notes 表存在（无效计数应为 0）
+        let links_invalid_fk: i64 = sqlite
+            .query_row(
+                "SELECT COUNT(*) FROM links l \
+                 WHERE l.vault_id = ?1 AND l.target_note_id IS NOT NULL \
+                 AND NOT EXISTS (SELECT 1 FROM notes n WHERE n.id = l.target_note_id)",
+                params![vid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(1);
+        assert_eq!(links_invalid_fk, 0, "非悬挂链接的 target_note_id 外键必须有效");
+    }
+
+    /// 移动文件（改 rel_path，内容不变）→ 重新索引 → note id 不变（content_hash 稳定）。
+    #[test]
+    fn index_vault_inner_id_stable_on_move() {
+        let (vid, vault_dir, db) = setup();
+        seed(&vault_dir);
+
+        index_vault_inner(&vid, &db).unwrap();
+
+        let sqlite = db.sqlite();
+        let old_id: String = sqlite
+            .query_row(
+                "SELECT id FROM notes WHERE vault_id = ?1 AND file_name = ?2",
+                params![vid, "日志.md"],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .expect("索引后应有 日志.md");
+        assert_eq!(old_id.len(), 64, "原 id 应为 64 位 hex");
+
+        // 改名（改 rel_path，内容字节不变）→ 重新全量索引
+        std::fs::rename(vault_dir.join("日志.md"), vault_dir.join("日志归档.md")).unwrap();
+        index_vault_inner(&vid, &db).unwrap();
+
+        let new_id: String = sqlite
+            .query_row(
+                "SELECT id FROM notes WHERE vault_id = ?1 AND file_name = ?2",
+                params![vid, "日志归档.md"],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .expect("重索引后应有 日志归档.md");
+
+        assert_eq!(
+            new_id, old_id,
+            "内容不变（仅改 rel_path）→ id 应稳定不变（content_hash 驱动）"
+        );
+    }
+
+    /// 碰撞消歧：两篇内容字节完全相同的 md → 全量 → 双双带 #short 后缀、content_hash 列存纯 hash。
+    /// 删其一、重新全量 → 剩余方退出碰撞态，id 从 hash#short 回到纯 hash（已知边缘，见上文注释）。
+    #[test]
+    fn index_vault_inner_collision_disambiguates() {
+        let (vid, vault_dir, db) = setup();
+        // 两篇内容字节完全相同（不同文件名）
+        let same = "# 完全相同的内容\n\n- [x] 同一份待办\n";
+        std::fs::write(vault_dir.join("a.md"), same).unwrap();
+        std::fs::write(vault_dir.join("b.md"), same).unwrap();
+
+        index_vault_inner(&vid, &db).expect("index_vault_inner 应成功");
+        let sqlite = db.sqlite();
+
+        let id_a: String = sqlite
+            .query_row(
+                "SELECT id FROM notes WHERE vault_id = ?1 AND file_name = 'a.md'",
+                params![vid],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .expect("应有 a.md");
+        let id_b: String = sqlite
+            .query_row(
+                "SELECT id FROM notes WHERE vault_id = ?1 AND file_name = 'b.md'",
+                params![vid],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .expect("应有 b.md");
+        assert!(id_a.contains('#'), "碰撞 a.md id 应带 #short：{}", id_a);
+        assert!(id_b.contains('#'), "碰撞 b.md id 应带 #short：{}", id_b);
+        assert_ne!(id_a, id_b, "碰撞双方 id 必须不同");
+
+        // content_hash 列恒为纯 hash（64 hex），两行相等
+        let hash_a: String = sqlite
+            .query_row(
+                "SELECT content_hash FROM notes WHERE vault_id = ?1 AND file_name = 'a.md'",
+                params![vid],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .expect("应有 a.md hash");
+        let hash_b: String = sqlite
+            .query_row(
+                "SELECT content_hash FROM notes WHERE vault_id = ?1 AND file_name = 'b.md'",
+                params![vid],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .expect("应有 b.md hash");
+        assert_eq!(hash_a.len(), 64, "content_hash 应为 64 hex");
+        assert_eq!(hash_a, hash_b, "同内容两份 content_hash 应相等");
+        assert!(!hash_a.contains('#'), "content_hash 列不应带 #");
+
+        // 删 a.md → 重新全量 → b.md 退出碰撞，id 回纯 hash（已知边缘漂移，固化）
+        std::fs::remove_file(vault_dir.join("a.md")).unwrap();
+        index_vault_inner(&vid, &db).unwrap();
+        let id_b_after: String = sqlite
+            .query_row(
+                "SELECT id FROM notes WHERE vault_id = ?1 AND file_name = 'b.md'",
+                params![vid],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .expect("b.md 仍应在");
+        assert_eq!(
+            id_b_after, hash_b,
+            "碰撞解除后 b.md id 应回纯 content_hash（已知边缘漂移）"
+        );
+    }
 }

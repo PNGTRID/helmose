@@ -29,6 +29,7 @@ notify-debouncer-mini = "0.4"
 walkdir = "2.5"
 gray_matter = "0.2"
 pulldown-cmark = { version = "0.11", default-features = false, features = ["html"] }
+sha2 = "0.10"
 regex = "1"
 once_cell = "1"
 parking_lot = "0.12"

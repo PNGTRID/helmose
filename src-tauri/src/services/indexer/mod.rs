@@ -5,7 +5,6 @@
 
 pub mod frontmatter;
 pub mod incremental;
-pub mod layers;
 pub mod projects;
 pub mod sections;
 pub mod tasks;
@@ -37,8 +36,10 @@ pub struct ParsedNote {
 /// 解析单个 md 文件（rel_path 相对 vault 根，content 文件全文，mtime 修改时间）
 pub fn parse_file(rel_path: &str, content: &str, mtime: i64) -> ParsedNote {
     let fm = frontmatter::parse(content);
-    let layer = layers::layer_of(rel_path);
-    let note_type = layers::type_of(rel_path, layer);
+    // note_type / layer 改由规范.md 契约（services::contract）驱动，取代 layers.rs 旧编号硬编码
+    let fm_type = fm.data.get("type").and_then(|v| v.as_str());
+    let note_type = crate::services::contract::infer_note_type(rel_path, fm_type);
+    let layer = crate::services::contract::infer_layer(note_type.as_deref());
     let sections = sections::split_sections(&fm.content);
     let file_name = file_name_of(rel_path);
 
@@ -76,6 +77,8 @@ pub fn parse_file(rel_path: &str, content: &str, mtime: i64) -> ParsedNote {
     }
 
     let wikilink_list = wikilinks::extract(&fm.content);
+    // content_hash 在 fm.content move 进 raw_content 之前算好（sha256 规范化正文）
+    let content_hash = crate::utils::hash::content_hash(&fm.content);
 
     ParsedNote {
         rel_path: rel_path.to_string(),
@@ -89,7 +92,7 @@ pub fn parse_file(rel_path: &str, content: &str, mtime: i64) -> ParsedNote {
         frontmatter: fm.data,
         raw_content: fm.content,
         mtime,
-        content_hash: None,
+        content_hash: Some(content_hash),
         tasks: task_list,
         wikilinks: wikilink_list,
     }
@@ -185,9 +188,14 @@ tags: []
 "#;
 
     #[test]
-    fn parses_l1_experience() {
-        let p = parse_file("5-经历/2026-04/2026-04-01.md", L1_SAMPLE, 0);
-        assert_eq!(p.layer, 1);
+    fn parses_with_frontmatter_type() {
+        // frontmatter.type=experience → note_type=experience，layer=L3（契约驱动，取代旧 5-经历→L1）
+        let p = parse_file(
+            "05_个人成长与认知资产/经历/2026-04/2026-04-01.md",
+            L1_SAMPLE,
+            0,
+        );
+        assert_eq!(p.layer, 3);
         assert_eq!(p.note_type.as_deref(), Some("experience"));
         assert_eq!(p.title.as_deref(), Some("2026-04-01 经历"));
         assert_eq!(p.date_iso.as_deref(), Some("2026-04-01"));
@@ -197,10 +205,15 @@ tags: []
     }
 
     #[test]
-    fn parses_l3_log() {
-        let p = parse_file("0-日志/2026-06/2026-06-21.md", L3_SAMPLE, 0);
-        assert_eq!(p.layer, 3);
-        assert_eq!(p.note_type.as_deref(), Some("log"));
+    fn parses_no_frontmatter_降级默认() {
+        // 无 frontmatter.type + 路径不在契约 type→dir 映射 → note_type=None，layer=L2（降级，不报错）
+        let p = parse_file(
+            "07_决策与复盘/日志/2026-06/2026-06-21.md",
+            L3_SAMPLE,
+            0,
+        );
+        assert_eq!(p.layer, 2);
+        assert_eq!(p.note_type, None);
         assert_eq!(p.date_iso.as_deref(), Some("2026-06-21"));
         // checkbox 全文 2（已完成/未完成）+ 今日待办 section bullet 1（写代码，跳过 checkbox 行）= 3
         assert_eq!(p.tasks.len(), 3);
@@ -208,9 +221,13 @@ tags: []
 
     /// 对真实 wiki 跑解析（smoke test）：验证引擎对真实数据的鲁棒性 + 统计合理。
     /// 不写库，只解析。可通过 HELMOSE_TEST_VAULT 环境变量指定路径。
+    /// #[ignore]：依赖本机 ~/wiki（CI 无此路径）。默认 cargo test 跳过；
+    /// 本地 `cargo test -- --ignored` 显式运行；cargo-llvm-cov 默认也不计入。
     #[test]
+    #[ignore]
     fn index_real_wiki_smoke() {
         use walkdir::WalkDir;
+        use crate::utils::exclude::is_excluded_component; // 复用契约，避免排除规则漂移
 
         let root =
             std::env::var("HELMOSE_TEST_VAULT").unwrap_or_else(|_| "/Users/yuanruiqin/wiki".into());
@@ -218,8 +235,6 @@ tags: []
             eprintln!("[smoke] skip: {} 不存在", root);
             return;
         }
-
-        let exclude = |name: &str| name.starts_with('.') || name == "6-原始资料" || name == "专家团";
 
         let mut notes = 0usize;
         let mut tasks = 0usize;
@@ -233,7 +248,7 @@ tags: []
                 rel.components().all(|c| {
                     c.as_os_str()
                         .to_str()
-                        .map(|n| !exclude(n))
+                        .map(|n| !is_excluded_component(n))
                         .unwrap_or(true)
                 })
             })

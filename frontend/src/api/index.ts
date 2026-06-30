@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { AgentExport, Backlink, GraphData, IndexStats, Note, NoteContent, NoteMeta, Project, SearchResult, TagCount, Task, Vault, VaultInput } from '../types';
+import type { AgentExport, Backlink, GraphData, IndexStats, Note, NoteContent, NoteMeta, Project, ScaffoldStats, SearchResult, TagCount, Task, Vault, VaultInput } from '../types';
 
 export async function ping(): Promise<string> {
   return invoke<string>('ping');
@@ -26,6 +26,11 @@ export async function deleteVault(vaultId: string): Promise<void> {
 
 export async function indexVault(vaultId: string): Promise<IndexStats> {
   return invoke<IndexStats>('index_vault', { vaultId });
+}
+
+/** 脚手架：在空目录生成知识库骨架（00~09 目录 + 11 种 type 模板 + 根目录文件） */
+export async function scaffoldVault(targetPath: string): Promise<ScaffoldStats> {
+  return invoke<ScaffoldStats>('scaffold_vault', { targetPath });
 }
 
 export async function getNotes(

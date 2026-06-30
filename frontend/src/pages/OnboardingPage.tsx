@@ -54,6 +54,38 @@ export default function OnboardingPage() {
     }
   };
 
+  // 新建知识库：选空目录 → 脚手架生成骨架 → 添加 vault → 索引
+  const createNew = async () => {
+    const p = await api.pickFolder();
+    if (!p) return;
+    setBusy(true);
+    let scaffolded = false;
+    try {
+      const stats = await api.scaffoldVault(p);
+      scaffolded = true;
+      message.success(
+        `已生成骨架：${stats.dirs_created} 目录 + ${stats.templates_created} 模板，开始索引…`
+      );
+      const v = await api.addVault({
+        name: name.trim() || "我的知识库",
+        root_path: p,
+        is_obsidian_shared: false,
+      });
+      setVault(v);
+      await index();
+    } catch (e) {
+      // scaffold 成功但 addVault/index 失败：目录已铺文件，重试会被「已有 vault」拒绝。
+      // 引导用户改用「添加并索引」打开该目录，避免卡死。
+      message.error(
+        scaffolded
+          ? `骨架已生成但后续步骤失败（${e}）。请改用上方「添加并索引」打开该目录`
+          : `创建失败：${e}`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div style={{ maxWidth: 560, margin: "60px auto" }}>
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
@@ -101,6 +133,13 @@ export default function OnboardingPage() {
             <Button type="primary" block size="large" loading={busy} onClick={confirm}>
               添加并索引
             </Button>
+
+            <Button block size="large" loading={busy} onClick={createNew}>
+              ✨ 新建知识库（生成 00~09 骨架）
+            </Button>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              选一个空文件夹，Helmose 按规范生成目录骨架与模板；已有 vault 请用上方「添加并索引」。
+            </Text>
           </Space>
         </Card>
       </Space>

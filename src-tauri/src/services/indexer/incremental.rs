@@ -11,20 +11,14 @@
 use crate::services::indexer;
 use crate::services::Database;
 use crate::utils::dates;
+use crate::utils::exclude::is_excluded_rel;
 use rusqlite::params;
 use std::path::Path;
-
-const EXCLUDE_DIRS: &[&str] = &["6-原始资料", "专家团"];
 
 fn rel_of(abs: &Path, root: &Path) -> Option<String> {
     abs.strip_prefix(root)
         .ok()
         .map(|r| r.to_string_lossy().replace('\\', "/"))
-}
-
-fn is_excluded_rel(rel: &str) -> bool {
-    rel.split('/')
-        .any(|seg| seg.starts_with('.') || EXCLUDE_DIRS.contains(&seg))
 }
 
 /// 判定 + 取相对路径。非 md / 排除目录 / 不在 root 下 → None。
@@ -108,15 +102,34 @@ pub fn upsert_rel(
                 );
             }
 
-            // 2. 复用 id，删旧 note（FK 级联删其 tasks/links），插新 note
-            let id = old
-                .as_ref()
-                .map(|o| o.0.clone())
+            // 2. note id = content_hash（稳定，移动不变）；删旧 note 后检测碰撞：
+            //    同 vault 若已有同 hash 的别的 rel_path → 加 rel_path 短哈希消歧
+            let base_hash = p
+                .content_hash
+                .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             tx.execute(
                 "DELETE FROM notes WHERE vault_id = ?1 AND rel_path = ?2",
                 params![vault_id, rel],
             )?;
+            let collision: Option<i64> = tx
+                .query_row(
+                    "SELECT 1 FROM notes \
+                     WHERE vault_id = ?1 AND content_hash = ?2 AND rel_path <> ?3 \
+                     LIMIT 1",
+                    params![vault_id, &base_hash, rel],
+                    |r| r.get(0),
+                )
+                .ok();
+            let id = if collision.is_some() {
+                eprintln!(
+                    "[incremental] content_hash 碰撞，加 rel_path 消歧：{} ← {}",
+                    base_hash, rel
+                );
+                format!("{}#{}", base_hash, crate::utils::hash::short_hash(rel))
+            } else {
+                base_hash
+            };
             tx.execute(
                 "INSERT INTO notes \
                  (id,vault_id,rel_path,file_name,title,note_type,layer,date_iso,week_iso,tags,frontmatter,raw_content,mtime,content_hash) \

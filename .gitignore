@@ -28,3 +28,9 @@ Thumbs.db
 
 # 日志
 *.log
+
+# 覆盖率产物（vitest / cargo-llvm-cov）
+coverage/
+
+# spec-workflow 本地工作目录
+.spec-workflow/

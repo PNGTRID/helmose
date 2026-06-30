@@ -63,6 +63,8 @@ pub fn run() {
             commands::tasks::get_tasks,
             // 项目
             commands::projects::get_projects,
+            // 脚手架（新建知识库骨架）
+            commands::scaffold::scaffold_vault,
             // 全库搜索（FTS5）
             commands::search::search_notes,
             // Agent 状态导出（写 app_data_dir/agent）
