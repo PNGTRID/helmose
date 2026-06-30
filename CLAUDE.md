@@ -20,8 +20,8 @@
 ## 开发与验证命令（客观裁判）
 
 ```bash
-# 前端依赖
-cd frontend && npm install
+# 前端依赖（pnpm；本机 npm 损坏、install 不建 .bin，统一用 pnpm）
+cd frontend && pnpm install
 
 # 开发（前端 + Tauri 后端）
 cd frontend && npm run tauri:dev
