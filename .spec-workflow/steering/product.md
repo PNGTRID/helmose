@@ -22,11 +22,12 @@ Helmose（helm = 舵手）是一个 **AI 驱动的人生知识库桌面应用**�
 
 按版本里程碑（当前 **v0.1**）：
 
-1. **Obsidian 式 vault 接入**：直接读写本地 markdown 文件夹，与 Obsidian 共存（不破坏原文）。首次启动引导选择/新建 vault。
-2. **分层索引引擎（Rust）**：把 vault 全量 md 解析成结构化数据（笔记 / 任务 / wikilink / frontmatter / 分层 L1-L3），写入 SQLite 派生索引。
-3. **文档库（Obsidian 式浏览）**：三栏界面（目录树 + 文件列表 + markdown 预览），让用户能浏览 vault 中**所有** md 文档——填补"看得到自己的知识"这一基础缺口。
-4. **今日聚焦（教练面板）**：v0.1 显示索引统计 + 待办任务；v0.2 接 AI 给出主线判定与教练建议。
-5. **Agent 状态接口（规划中）**：导出 `LIFE-STATE.md` + `state.json`，inbox 写回保护，供外部智能体定时读取。
+1. **Obsidian 式 vault 接入**：直接读写本地 markdown 文件夹，与 Obsidian 共存（不破坏原文）。首次启动引导选择已有 vault，或用脚手架 `scaffold_vault` 新建 Life OS 目录骨架。
+2. **分层索引引擎（Rust，契约驱动）**：按规范.md 契约把 vault 全量 md 解析成结构化数据（笔记 / 任务 / wikilink / frontmatter / type / 分层 L1-L3），写入 SQLite 派生索引；`notify` 文件监听 + `content_hash`(sha256) 增量更新。
+3. **文档库（Obsidian 式工作台）**：Ribbon + 可拖拽文件树 + 标签页 + markdown 预览 + 反向链接面板 + 关系图谱；支持 CodeMirror 编辑写回（写前 `.helmose/backup` 备份）。
+4. **全库搜索**：基于 `notes_fts`（FTS5 trigram）的全文搜索，命令面板 Ctrl/⌘+P 触发，命中关键词高亮 snippet。
+5. **今日聚焦（教练面板）**：v0.1 显示索引统计 + 待办任务；v0.2 接 AI 给出主线判定与教练建议。
+6. **Agent 状态接口**：`export_life_state` 聚合后写 `app_data_dir/agent/{LIFE-STATE.md（人读）, state.json（机读）}`，供外部智能体定时读取；inbox 写回带保护（规划中）。
 
 ## Business Objectives
 
@@ -38,8 +39,8 @@ Helmose（helm = 舵手）是一个 **AI 驱动的人生知识库桌面应用**�
 
 - **索引完整性**：vault 全量 md（~1.9 万篇）100% 入库，索引耗时 < 10s。
 - **浏览可用性**：文档库任意目录的文件列表 < 200ms 响应；单篇预览 < 100ms。
-- **AI 消费就绪**：`LIFE-STATE.md` 能让外部智能体正确判断"当前主线 + 今日该做什么"（v0.2 验收）。
-- **原文零破坏**：任何操作都不修改 vault 中的 md 原文（只读 + 派生缓存）。
+- **AI 消费就绪**：`export_life_state` 已产出 `LIFE-STATE.md` + `state.json`；外部智能体据此正确判断"当前主线 + 今日该做什么"为 v0.2 验收项。
+- **原文零破坏**：除用户明确编辑动作（`save_note_content`，写前 `.helmose/backup` 备份）外，索引/查询/浏览全只读，不修改 vault md 原文。
 
 ## Product Principles
 
@@ -59,6 +60,4 @@ Helmose（helm = 舵手）是一个 **AI 驱动的人生知识库桌面应用**�
 ### Potential Enhancements
 - **AI 教练层（v0.2）**：主线判定、每日教练建议、明日一句。
 - **wikilink 可点跳转**：文档库预览中的 `[[wikilink]]` 点击跳转到目标笔记。
-- **全文搜索**：基于已有 `notes_fts`（FTS5 trigram）的全库搜索。
-- **文件监听增量索引**：基于 `notify` 的 vault 变更实时增量索引（依赖已就绪）。
 - **Agent 写回 inbox**：外部智能体产出经审核后写入 vault。
