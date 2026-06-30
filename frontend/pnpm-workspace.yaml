@@ -1,0 +1,5 @@
+# pnpm 11 批准 esbuild 的 build script（vite 7 依赖 esbuild）。
+# @esbuild/* 平台包已自带 binary，postinstall 非功能必需，但不批准会触发
+# ERR_PNPM_IGNORED_BUILDS，干扰 tauri dev 的依赖检查。
+allowBuilds:
+  esbuild: true

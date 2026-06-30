@@ -45,18 +45,22 @@ export default function GraphPage() {
           双链关系（全部有连接的节点）· 拖拽节点重排，点击节点跳转
         </Text>
       </div>
-      {/* data! 安全：empty 已保证 data 非 null */}
+      {/* children 在 GraphPage render 时即时求值，必须 {data && …} 短路保护：
+          data=null（加载前 / fetch 失败）时 data.nodes 会崩 —— DataState 的 empty
+          判断拦不住 JSX 构造期求值（这是我上次用 data! 误判引入的回归）。 */}
       <DataState
         loading={loading}
         empty={!data || data.nodes.length === 0}
         emptyText="暂无可视化的双链关系（需先索引含 [[wikilink]] 的笔记）"
       >
-        <>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {data!.nodes.length} 节点 / {data!.edges.length} 连接
-          </Text>
-          <ForceGraph data={data!} onSelect={onSelect} />
-        </>
+        {data && (
+          <>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {data.nodes.length} 节点 / {data.edges.length} 连接
+            </Text>
+            <ForceGraph data={data} onSelect={onSelect} />
+          </>
+        )}
       </DataState>
     </div>
   );
