@@ -2,10 +2,11 @@
 // 后端 get_tasks 已就绪（按 done 筛选），本页做分组展示与源笔记钻取。
 
 import { useEffect, useMemo, useState } from "react";
-import { Card, Drawer, Empty, List, Space, Spin, Tabs, Tag, Typography } from "antd";
+import { Card, Drawer, List, Space, Spin, Tabs, Tag, Typography } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useWikilinkNavigation } from "../hooks/useWikilinkNavigation";
+import DataState from "../components/DataState";
 import type { NoteContent, Task } from "../types";
 
 const { Text, Title } = Typography;
@@ -136,15 +137,11 @@ export default function TasksPage() {
             { key: "done", label: "已完成" },
           ]}
         />
-        {loading ? (
-          <div style={{ textAlign: "center", padding: 40 }}>
-            <Spin />
-          </div>
-        ) : groups.length === 0 ? (
-          <Empty
-            description={tab === "open" ? "暂无未完成任务" : "暂无已完成任务"}
-          />
-        ) : (
+        <DataState
+          loading={loading}
+          empty={groups.length === 0}
+          emptyText={tab === "open" ? "暂无未完成任务" : "暂无已完成任务"}
+        >
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             {groups.map((g) => (
               <div key={g.label}>
@@ -182,7 +179,7 @@ export default function TasksPage() {
               </div>
             ))}
           </Space>
-        )}
+        </DataState>
       </Card>
 
       <Drawer

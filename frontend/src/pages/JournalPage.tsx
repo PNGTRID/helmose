@@ -1,10 +1,11 @@
 // 日志页：列出 note_type 为 experience / log 的笔记（前端过滤 useAllNotesMeta）
 // 点击复用 openNoteFromMeta → NoteView 打开编辑
 import { useMemo } from "react";
-import { Alert, Empty, List, Spin, Tag, Typography } from "antd";
+import { List, Tag, Typography } from "antd";
 import { useVaultStore } from "../stores/vault";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import { openNoteFromMeta } from "../utils/note";
+import DataState from "../components/DataState";
 
 const { Text } = Typography;
 
@@ -49,15 +50,13 @@ export default function JournalPage() {
         </Text>
       </div>
 
-      {loading ? (
-        <div style={{ textAlign: "center", padding: 40 }}>
-          <Spin />
-        </div>
-      ) : error ? (
-        <Alert type="error" showIcon message="笔记加载失败" description={error} />
-      ) : journal.length === 0 ? (
-        <Empty description="暂无日志/经历笔记（note_type 需为 experience 或 log，并已索引）" />
-      ) : (
+      <DataState
+        loading={loading}
+        error={error}
+        errorTitle="笔记加载失败"
+        empty={journal.length === 0}
+        emptyText="暂无日志/经历笔记（note_type 需为 experience 或 log，并已索引）"
+      >
         <List
           bordered
           dataSource={journal}
@@ -90,7 +89,7 @@ export default function JournalPage() {
             );
           }}
         />
-      )}
+      </DataState>
     </div>
   );
 }

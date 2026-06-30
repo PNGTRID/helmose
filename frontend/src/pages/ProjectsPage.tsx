@@ -1,9 +1,10 @@
 // 项目看板：按 status 分组展示项目（Obsidian 看板式）。点击项目 → 开笔记 tab。
 import { useEffect, useState } from "react";
-import { Empty, Spin, Tag, Typography } from "antd";
+import { Tag, Typography } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { openNoteFromMeta } from "../utils/note";
+import DataState from "../components/DataState";
 import type { Project } from "../types";
 
 const { Text } = Typography;
@@ -66,11 +67,11 @@ export default function ProjectsPage() {
         </Text>
       </div>
 
-      {loading ? (
-        <Spin />
-      ) : projects.length === 0 ? (
-        <Empty description="暂无项目（需 frontmatter type:project + project-status 标签，并已重新索引）" />
-      ) : (
+      <DataState
+        loading={loading}
+        empty={projects.length === 0}
+        emptyText="暂无项目（需 frontmatter type:project + project-status 标签，并已重新索引）"
+      >
         <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
           {orderedStatus.map((s) => (
             <div
@@ -130,7 +131,7 @@ export default function ProjectsPage() {
             </div>
           ))}
         </div>
-      )}
+      </DataState>
     </div>
   );
 }

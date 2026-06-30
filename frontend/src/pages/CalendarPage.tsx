@@ -1,12 +1,13 @@
 // 日历页：antd <Calendar>，每个日期单元格标注当天笔记数，点击日期 → 右侧列出当天笔记
 // 复用 useAllNotesMeta（共享全量元数据 hook）+ openNoteFromMeta（开笔记 tab）
 import { useMemo, useState } from "react";
-import { Alert, Badge, Calendar, Empty, List, Spin, Typography } from "antd";
+import { Badge, Calendar, Empty, List, Typography } from "antd";
 import type { Dayjs } from "dayjs";
 import { useVaultStore } from "../stores/vault";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import { dateKey } from "../utils/date";
 import { openNoteFromMeta } from "../utils/note";
+import DataState from "../components/DataState";
 import type { NoteMeta } from "../types";
 
 const { Text } = Typography;
@@ -53,13 +54,7 @@ export default function CalendarPage() {
             {byDate.size} 个日期有笔记 · 点击日期查看当天笔记
           </Text>
         </div>
-        {loading ? (
-          <div style={{ textAlign: "center", padding: 40 }}>
-            <Spin />
-          </div>
-        ) : error ? (
-          <Alert type="error" showIcon message="笔记加载失败" description={error} />
-        ) : (
+        <DataState loading={loading} error={error} errorTitle="笔记加载失败">
           <Calendar
             cellRender={(date, info) => {
               // 仅月视图日期单元格标注当天笔记数；年视图月份单元格保留默认渲染
@@ -77,7 +72,7 @@ export default function CalendarPage() {
               if (info.source === "date") setSelected(date);
             }}
           />
-        )}
+        </DataState>
       </div>
       <div
         style={{

@@ -1,10 +1,11 @@
 // 图谱视图：全库双链关系力导向可视化。点击节点 → 开笔记 tab。
 // 标签栏已移至右侧大纲侧边栏（SidePanel），这里只保留图谱。
 import { useEffect, useState } from "react";
-import { Empty, Spin, Typography } from "antd";
+import { Typography } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { openNoteFromMeta } from "../utils/note";
+import DataState from "../components/DataState";
 import type { GraphData, GraphNode } from "../types";
 import ForceGraph from "../components/ForceGraph";
 
@@ -44,20 +45,19 @@ export default function GraphPage() {
           双链关系（全部有连接的节点）· 拖拽节点重排，点击节点跳转
         </Text>
       </div>
-      {loading ? (
-        <div style={{ textAlign: "center", padding: 60 }}>
-          <Spin />
-        </div>
-      ) : !data || data.nodes.length === 0 ? (
-        <Empty description="暂无可视化的双链关系（需先索引含 [[wikilink]] 的笔记）" />
-      ) : (
+      {/* data! 安全：empty 已保证 data 非 null */}
+      <DataState
+        loading={loading}
+        empty={!data || data.nodes.length === 0}
+        emptyText="暂无可视化的双链关系（需先索引含 [[wikilink]] 的笔记）"
+      >
         <>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            {data.nodes.length} 节点 / {data.edges.length} 连接
+            {data!.nodes.length} 节点 / {data!.edges.length} 连接
           </Text>
-          <ForceGraph data={data} onSelect={onSelect} />
+          <ForceGraph data={data!} onSelect={onSelect} />
         </>
-      )}
+      </DataState>
     </div>
   );
 }
