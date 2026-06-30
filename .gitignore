@@ -7,6 +7,7 @@ dist/
 frontend/dist/
 src-tauri/target/
 target/
+*.tsbuildinfo
 
 # Tauri 生成
 src-tauri/gen/

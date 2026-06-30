@@ -1,4 +1,4 @@
-// Ribbon：最左竖排图标条（Obsidian 标志性左侧导航）
+// Ribbon：最左竖排图标+文字条（Obsidian 式左侧导航，带文字便于新用户识别）
 import {
   FolderOpenOutlined,
   SearchOutlined,
@@ -8,6 +8,8 @@ import {
   ProjectOutlined,
   SettingOutlined,
   BlockOutlined,
+  CalendarOutlined,
+  BookOutlined,
 } from "@ant-design/icons";
 import { useTabsStore, type TabType } from "../stores/tabs";
 
@@ -33,6 +35,7 @@ export default function Ribbon() {
         onClick={toggleFile}
       >
         <FolderOpenOutlined />
+        <span className="ob-ribbon-label">文件</span>
       </button>
       <button
         className="ob-ribbon-btn"
@@ -40,6 +43,7 @@ export default function Ribbon() {
         onClick={() => setPalette(true)}
       >
         <SearchOutlined />
+        <span className="ob-ribbon-label">搜索</span>
       </button>
       <button
         className={`ob-ribbon-btn ${isActiveView("graph") ? "active" : ""}`}
@@ -47,6 +51,7 @@ export default function Ribbon() {
         onClick={() => openView("graph", "图谱")}
       >
         <ApartmentOutlined />
+        <span className="ob-ribbon-label">图谱</span>
       </button>
       <button
         className={`ob-ribbon-btn ${isActiveView("today") ? "active" : ""}`}
@@ -54,6 +59,7 @@ export default function Ribbon() {
         onClick={() => openView("today", "今日聚焦")}
       >
         <AimOutlined />
+        <span className="ob-ribbon-label">今日</span>
       </button>
       <button
         className={`ob-ribbon-btn ${isActiveView("tasks") ? "active" : ""}`}
@@ -61,6 +67,7 @@ export default function Ribbon() {
         onClick={() => openView("tasks", "任务")}
       >
         <CheckSquareOutlined />
+        <span className="ob-ribbon-label">任务</span>
       </button>
       <button
         className={`ob-ribbon-btn ${isActiveView("projects") ? "active" : ""}`}
@@ -68,6 +75,23 @@ export default function Ribbon() {
         onClick={() => openView("projects", "项目")}
       >
         <ProjectOutlined />
+        <span className="ob-ribbon-label">项目</span>
+      </button>
+      <button
+        className={`ob-ribbon-btn ${isActiveView("calendar") ? "active" : ""}`}
+        title="日历"
+        onClick={() => openView("calendar", "日历")}
+      >
+        <CalendarOutlined />
+        <span className="ob-ribbon-label">日历</span>
+      </button>
+      <button
+        className={`ob-ribbon-btn ${isActiveView("journal") ? "active" : ""}`}
+        title="日志"
+        onClick={() => openView("journal", "日志")}
+      >
+        <BookOutlined />
+        <span className="ob-ribbon-label">日志</span>
       </button>
       <div className="ob-ribbon-spacer" />
       <button
@@ -76,6 +100,7 @@ export default function Ribbon() {
         onClick={toggleSide}
       >
         <BlockOutlined />
+        <span className="ob-ribbon-label">侧栏</span>
       </button>
       <button
         className={`ob-ribbon-btn ${isActiveView("settings") ? "active" : ""}`}
@@ -83,6 +108,7 @@ export default function Ribbon() {
         onClick={() => openView("settings", "设置")}
       >
         <SettingOutlined />
+        <span className="ob-ribbon-label">设置</span>
       </button>
     </div>
   );

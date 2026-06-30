@@ -7,6 +7,8 @@ import {
   FileTextOutlined,
   ProjectOutlined,
   SettingOutlined,
+  CalendarOutlined,
+  BookOutlined,
 } from "@ant-design/icons";
 import { useTabsStore, type Tab } from "../stores/tabs";
 
@@ -22,6 +24,10 @@ function iconFor(t: Tab) {
       return <CheckSquareOutlined />;
     case "projects":
       return <ProjectOutlined />;
+    case "calendar":
+      return <CalendarOutlined />;
+    case "journal":
+      return <BookOutlined />;
     case "settings":
       return <SettingOutlined />;
   }

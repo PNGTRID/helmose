@@ -17,6 +17,8 @@ import GraphPage from "./pages/GraphPage";
 import TasksPage from "./pages/TasksPage";
 import TodayPage from "./pages/TodayPage";
 import ProjectsPage from "./pages/ProjectsPage";
+import CalendarPage from "./pages/CalendarPage";
+import JournalPage from "./pages/JournalPage";
 import SettingsPage from "./pages/SettingsPage";
 
 const { Text } = Typography;
@@ -180,6 +182,10 @@ export default function App() {
         return <TasksPage />;
       case "projects":
         return <ProjectsPage />;
+      case "calendar":
+        return <CalendarPage />;
+      case "journal":
+        return <JournalPage />;
       case "settings":
         return <SettingsPage />;
       default:
