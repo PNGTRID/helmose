@@ -1,0 +1,69 @@
+/* SidePanel：右面板（大纲/反链/标签） */
+.ob-side-panel {
+  width: 300px;
+  flex-shrink: 0;
+  background: var(--ob-bg-mod);
+  border-left: 1px solid var(--ob-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ob-side-scroll {
+  flex: 1;
+  overflow: auto;
+}
+.ob-side-section {
+  border-bottom: 1px solid var(--ob-border);
+  padding-bottom: 6px;
+}
+.ob-side-title {
+  padding: 10px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ob-text-faint);
+}
+.ob-side-link {
+  display: block;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: var(--ob-text);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.ob-side-link:hover {
+  background: var(--ob-bg-mod-hover);
+  border-left-color: var(--ob-accent);
+}
+.ob-side-link .ob-side-sub {
+  font-size: 11px;
+  color: var(--ob-text-faint);
+}
+.ob-outline-1 {
+  padding-left: 12px;
+  font-weight: 500;
+}
+.ob-outline-2 {
+  padding-left: 24px;
+}
+.ob-outline-3 {
+  padding-left: 36px;
+  color: var(--ob-text-muted);
+}
+
+/* —— 标签 —— */
+.ob-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 2px;
+  font-size: 11px;
+  border-radius: 12px;
+  background: var(--ob-bg-mod-active);
+  color: var(--ob-text-muted);
+  cursor: pointer;
+}
+.ob-tag:hover {
+  background: var(--ob-accent-mod);
+  color: var(--ob-accent);
+}

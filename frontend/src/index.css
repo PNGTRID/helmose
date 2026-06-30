@@ -1,3 +1,11 @@
+/* ============================================================
+   全局基础：reset + Obsidian 浅色主题变量 + body + 滚动条 + antd 输入框覆盖
+   组件私有样式已拆到各组件同目录 .css（Ribbon/FilePanel/TabBar/StatusBar/SidePanel/NoteEditor/App）。
+   此处只保留必须全局的部分：
+   - CSS 变量（所有组件 .css 引用）
+   - marked 渲染的 markdown 预览（HTML 内部无组件类名，必须全局）
+   - antd/CodeMirror 覆盖、跨组件共享类（ob-file-item）
+   ============================================================ */
 * {
   box-sizing: border-box;
 }
@@ -10,9 +18,6 @@ body,
   height: 100%;
 }
 
-/* ============================================================
-   Obsidian 浅色主题（CSS 变量）
-   ============================================================ */
 :root {
   --ob-bg: #ffffff;
   --ob-bg-mod: #f8f9fa;
@@ -40,324 +45,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ============================================================
-   Obsidian 工作台外壳
-   ============================================================ */
-.ob-app {
-  display: flex;
-  height: 100vh;
-  width: 100vw;
-  overflow: hidden;
-  background: var(--ob-bg);
-}
-
-/* 面板分隔拖拽条（Obsidian 式可伸缩侧栏） */
-.ob-resizer {
-  width: 4px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  background: transparent;
-  position: relative;
-  z-index: 10;
-  transition: background 0.15s;
-}
-.ob-resizer:hover,
-.ob-resizer:active {
-  background: var(--ob-accent);
-}
-
-/* —— Ribbon：最左竖排图标+文字条 —— */
-.ob-ribbon {
-  width: 72px;
-  flex-shrink: 0;
-  background: var(--ob-bg-mod);
-  border-right: 1px solid var(--ob-border);
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  padding: 8px 0;
-  gap: 2px;
-}
-.ob-ribbon-brand {
-  width: 100%;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  margin-bottom: 8px;
-}
-.ob-ribbon-btn {
-  width: 100%;
-  min-height: 50px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  border-radius: var(--ob-radius);
-  color: var(--ob-text-muted);
-  cursor: pointer;
-  border: none;
-  background: transparent;
-  font-size: 16px;
-  padding: 6px 2px;
-}
-.ob-ribbon-btn:hover {
-  background: var(--ob-bg-mod-hover);
-  color: var(--ob-text);
-}
-.ob-ribbon-btn.active {
-  color: var(--ob-accent);
-  background: var(--ob-accent-mod);
-}
-.ob-ribbon-label {
-  font-size: 10px;
-  line-height: 1.2;
-}
-.ob-ribbon-spacer {
-  flex: 1;
-}
-
-/* —— 左面板（文件树 / 搜索 / 标签）—— */
-.ob-file-panel {
-  width: 280px;
-  flex-shrink: 0;
-  background: var(--ob-bg-mod);
-  border-right: 1px solid var(--ob-border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.ob-panel-header {
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ob-text-muted);
-  border-bottom: 1px solid var(--ob-border);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-}
-.ob-panel-body {
-  flex: 1;
-  overflow: auto;
-  padding: 6px;
-}
-
-/* —— 主区 —— */
-.ob-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--ob-bg);
-}
-.ob-tabbar {
-  display: flex;
-  align-items: center;
-  height: 36px;
-  background: var(--ob-tab-bg);
-  border-bottom: 1px solid var(--ob-border);
-  padding: 0 6px;
-  gap: 2px;
-  overflow-x: auto;
-  flex-shrink: 0;
-}
-.ob-tab {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: 6px 6px 0 0;
-  cursor: pointer;
-  color: var(--ob-text-muted);
-  font-size: 13px;
-  max-width: 220px;
-  white-space: nowrap;
-}
-.ob-tab:hover {
-  background: var(--ob-bg-mod-hover);
-}
-.ob-tab.active {
-  background: var(--ob-tab-active-bg);
-  color: var(--ob-text);
-}
-.ob-tab-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ob-tab-close {
-  font-size: 10px;
-  opacity: 0.4;
-  display: inline-flex;
-}
-.ob-tab-close:hover {
-  opacity: 1;
-  color: var(--ob-accent);
-}
-.ob-content {
-  flex: 1;
-  overflow: auto;
-  padding: 24px 40px;
-  min-width: 0;
-}
-.ob-statusbar {
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
-  background: var(--ob-bg-mod);
-  border-top: 1px solid var(--ob-border);
-  font-size: 11px;
-  color: var(--ob-text-faint);
-  flex-shrink: 0;
-}
-
-/* —— 右面板（反向链接 / 大纲 / 标签）—— */
-.ob-side-panel {
-  width: 300px;
-  flex-shrink: 0;
-  background: var(--ob-bg-mod);
-  border-left: 1px solid var(--ob-border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.ob-side-scroll {
-  flex: 1;
-  overflow: auto;
-}
-.ob-side-section {
-  border-bottom: 1px solid var(--ob-border);
-  padding-bottom: 6px;
-}
-.ob-side-title {
-  padding: 10px 12px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--ob-text-faint);
-}
-.ob-side-link {
-  display: block;
-  padding: 4px 12px;
-  font-size: 13px;
-  color: var(--ob-text);
-  cursor: pointer;
-  border-left: 2px solid transparent;
-}
-.ob-side-link:hover {
-  background: var(--ob-bg-mod-hover);
-  border-left-color: var(--ob-accent);
-}
-.ob-side-link .ob-side-sub {
-  font-size: 11px;
-  color: var(--ob-text-faint);
-}
-.ob-outline-1 {
-  padding-left: 12px;
-  font-weight: 500;
-}
-.ob-outline-2 {
-  padding-left: 24px;
-}
-.ob-outline-3 {
-  padding-left: 36px;
-  color: var(--ob-text-muted);
-}
-
-/* —— 文件列表项（搜索结果）—— */
-.ob-file-item {
-  padding: 5px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--ob-text);
-}
-.ob-file-item:hover {
-  background: var(--ob-bg-mod-hover);
-}
-.ob-file-item.active {
-  background: var(--ob-accent-mod);
-  color: var(--ob-accent);
-}
-.ob-file-sub {
-  font-size: 11px;
-  color: var(--ob-text-faint);
-}
-
-/* —— 标签 —— */
-.ob-tag {
-  display: inline-block;
-  padding: 2px 8px;
-  margin: 2px;
-  font-size: 11px;
-  border-radius: 12px;
-  background: var(--ob-bg-mod-active);
-  color: var(--ob-text-muted);
-  cursor: pointer;
-}
-.ob-tag:hover {
-  background: var(--ob-accent-mod);
-  color: var(--ob-accent);
-}
-
-/* —— antd Tree 适配 Obsidian 风格 —— */
-.ob-tree .ant-tree {
-  font-size: 13px;
-  background: transparent;
-  color: var(--ob-text);
-}
-.ob-tree .ant-tree-treenode {
-  padding: 1px 0;
-}
-.ob-tree .ant-tree-node-content-wrapper {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-.ob-tree .ant-tree-node-content-wrapper:hover {
-  background: var(--ob-bg-mod-hover);
-}
-.ob-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
-.ob-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
-  background: var(--ob-accent-mod) !important;
-  color: var(--ob-accent);
-}
-.ob-tree .ant-tree-switcher {
-  color: var(--ob-text-faint);
-}
-
-/* 节点标题：单行省略号（侧边栏缩窄时不换行） */
-.ob-node-title {
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  min-width: 0;
-}
-.ob-node-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-.ob-vault-title {
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  min-width: 0;
-  font-weight: 600;
-}
-
-/* —— 滚动条（Obsidian 风格细滚动条）—— */
+/* —— 滚动条（Obsidian 风格细滚动条，app 内全局）—— */
 .ob-app ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -373,7 +61,7 @@ body {
   background: transparent;
 }
 
-/* —— antd 输入框适配 —— */
+/* —— antd 输入框适配（全局）—— */
 .ob-app .ant-input,
 .ob-app .ant-input-affix-wrapper {
   background: var(--ob-bg);
@@ -386,7 +74,7 @@ body {
 }
 
 /* ============================================================
-   markdown 预览（Obsidian 阅读视图排版）
+   markdown 预览（Obsidian 阅读视图排版）—— marked 渲染 HTML，必须全局
    ============================================================ */
 .md-preview {
   font-size: 15px;
@@ -490,7 +178,7 @@ body {
 .md-preview input[type="checkbox"] {
   margin-right: 0.4em;
 }
-/* wikilink 可点链接（Obsidian 式紫色双下划线） */
+/* wikilink 可点链接（Obsidian 式紫色双下划线）—— 类名被 JS closest 选择，禁止改名 */
 .md-preview .helmose-wikilink {
   color: var(--ob-accent);
   cursor: pointer;
@@ -519,80 +207,22 @@ body {
   border-radius: 2px;
 }
 
-/* 编辑器（Obsidian 风格等宽） */
-.ob-editor {
-  width: 100%;
-  max-width: 760px;
-  min-height: 70vh;
-  border: none;
-  outline: none;
-  resize: none;
-  font-family: "SFMono-Regular", Menlo, Consolas, "PingFang SC", monospace;
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--ob-text);
-  background: transparent;
-}
-.ob-editor:focus {
-  outline: none;
-}
-
-/* CodeMirror 编辑器容器（Obsidian 式） */
-.ob-editor-wrap {
-  max-width: 760px;
-  border: 1px solid var(--ob-border);
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--ob-bg);
-}
-.ob-editor-wrap .cm-editor {
-  background: var(--ob-bg);
-  font-size: 14px;
-}
-.ob-editor-wrap .cm-editor.cm-focused {
-  outline: none;
-}
-.ob-editor-wrap .cm-editor .cm-scroller {
-  font-family: "SFMono-Regular", Menlo, Consolas, "PingFang SC", monospace;
-  line-height: 1.75;
-  min-height: 420px;
-}
-.ob-editor-wrap .cm-gutters {
-  border-right: none;
-  background: transparent;
-  color: var(--ob-text-faint);
-}
-.ob-editor-wrap .cm-activeLine,
-.ob-editor-wrap .cm-activeLineGutter {
-  background: var(--ob-bg-mod);
-}
-/* markdown 语法着色（Obsidian 风格） */
-.ob-editor-wrap .cm-header {
-  color: var(--ob-accent);
-  font-weight: 600;
-}
-.ob-editor-wrap .cm-emphasis {
-  font-style: italic;
-}
-.ob-editor-wrap .cm-strong {
-  font-weight: 700;
-}
-.ob-editor-wrap .cm-link,
-.ob-editor-wrap .cm-url {
-  color: var(--ob-accent);
-}
-.ob-editor-wrap .cm-quote {
-  color: var(--ob-text-muted);
-}
-
-/* 空态 */
-.ob-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: var(--ob-text-faint);
+/* —— 文件列表项（搜索结果，跨 FilePanel/SidePanel/ProjectsPage 共享）—— */
+.ob-file-item {
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
   font-size: 13px;
-  gap: 8px;
+  color: var(--ob-text);
+}
+.ob-file-item:hover {
+  background: var(--ob-bg-mod-hover);
+}
+.ob-file-item.active {
+  background: var(--ob-accent-mod);
+  color: var(--ob-accent);
+}
+.ob-file-sub {
+  font-size: 11px;
+  color: var(--ob-text-faint);
 }

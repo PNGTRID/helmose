@@ -1,5 +1,6 @@
 // 笔记编辑模式：CodeMirror + marked 实时预览分屏 + 保存/取消。从 NoteView 拆出。
 // save 走 api.saveNoteContent（写 vault + .helmose/backup 备份），成功后回调 onSave(updated)。
+import "./NoteEditor.css";
 import { useState } from "react";
 import { Button, Space, message } from "antd";
 import { CloseOutlined, SaveOutlined } from "@ant-design/icons";

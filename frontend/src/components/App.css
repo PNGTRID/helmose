@@ -1,0 +1,51 @@
+/* App 外壳布局：应用容器 + 面板拖拽条 + 主区 + 内容区 + 空态 */
+.ob-app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--ob-bg);
+}
+
+/* 面板分隔拖拽条（Obsidian 式可伸缩侧栏） */
+.ob-resizer {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s;
+}
+.ob-resizer:hover,
+.ob-resizer:active {
+  background: var(--ob-accent);
+}
+
+/* —— 主区 —— */
+.ob-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--ob-bg);
+}
+
+.ob-content {
+  flex: 1;
+  overflow: auto;
+  padding: 24px 40px;
+  min-width: 0;
+}
+
+/* 空态 */
+.ob-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ob-text-faint);
+  font-size: 13px;
+  gap: 8px;
+}

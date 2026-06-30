@@ -1,0 +1,44 @@
+/* TabBar：顶部标签页栏 */
+.ob-tabbar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: var(--ob-tab-bg);
+  border-bottom: 1px solid var(--ob-border);
+  padding: 0 6px;
+  gap: 2px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.ob-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  color: var(--ob-text-muted);
+  font-size: 13px;
+  max-width: 220px;
+  white-space: nowrap;
+}
+.ob-tab:hover {
+  background: var(--ob-bg-mod-hover);
+}
+.ob-tab.active {
+  background: var(--ob-tab-active-bg);
+  color: var(--ob-text);
+}
+.ob-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ob-tab-close {
+  font-size: 10px;
+  opacity: 0.4;
+  display: inline-flex;
+}
+.ob-tab-close:hover {
+  opacity: 1;
+  color: var(--ob-accent);
+}

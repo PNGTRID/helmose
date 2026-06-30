@@ -1,4 +1,5 @@
 // 顶部标签页栏（Obsidian 式多 tab）
+import "./TabBar.css";
 import {
   ApartmentOutlined,
   AimOutlined,

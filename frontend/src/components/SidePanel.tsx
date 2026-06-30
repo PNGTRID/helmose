@@ -1,5 +1,6 @@
 // 右面板：大纲 + 反向链接 + 标签（可折叠，置底）。
 // 大纲/反链仅 active note tab 时填充；标签全库始终显示，可折叠。宽度由 App 传入（可拖拽）。
+import "./SidePanel.css";
 import { useEffect, useRef, useState } from "react";
 import { Spin } from "antd";
 import * as api from "../api";

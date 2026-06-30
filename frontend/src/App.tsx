@@ -1,5 +1,6 @@
 // Helmose · Obsidian 式工作台外壳
 // Ribbon + 左文件面板（可拖拽宽）+ 中标签页编辑区 + 右反向链接面板（可拖拽宽）+ 底状态栏
+import "./components/App.css";
 import { useEffect, useState, type MouseEvent } from "react";
 import { Spin } from "antd";
 import * as api from "./api";

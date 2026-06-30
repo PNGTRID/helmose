@@ -1,4 +1,5 @@
 // 底部状态栏：当前 vault + active tab 标题 + 版本提示
+import "./StatusBar.css";
 import { useTabsStore } from "../stores/tabs";
 import { useVaultStore } from "../stores/vault";
 

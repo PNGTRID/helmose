@@ -1,4 +1,5 @@
 // Ribbon：最左竖排图标+文字条（Obsidian 式左侧导航，带文字便于新用户识别）
+import "./Ribbon.css";
 import {
   FolderOpenOutlined,
   SearchOutlined,

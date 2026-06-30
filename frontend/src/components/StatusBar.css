@@ -1,0 +1,13 @@
+/* StatusBar：底部状态栏 */
+.ob-statusbar {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  background: var(--ob-bg-mod);
+  border-top: 1px solid var(--ob-border);
+  font-size: 11px;
+  color: var(--ob-text-faint);
+  flex-shrink: 0;
+}

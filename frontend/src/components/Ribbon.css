@@ -1,0 +1,52 @@
+/* Ribbon：最左竖排图标+文字条 */
+.ob-ribbon {
+  width: 72px;
+  flex-shrink: 0;
+  background: var(--ob-bg-mod);
+  border-right: 1px solid var(--ob-border);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 8px 0;
+  gap: 2px;
+}
+.ob-ribbon-brand {
+  width: 100%;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+.ob-ribbon-btn {
+  width: 100%;
+  min-height: 50px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: var(--ob-radius);
+  color: var(--ob-text-muted);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  padding: 6px 2px;
+}
+.ob-ribbon-btn:hover {
+  background: var(--ob-bg-mod-hover);
+  color: var(--ob-text);
+}
+.ob-ribbon-btn.active {
+  color: var(--ob-accent);
+  background: var(--ob-accent-mod);
+}
+.ob-ribbon-label {
+  font-size: 10px;
+  line-height: 1.2;
+}
+.ob-ribbon-spacer {
+  flex: 1;
+}

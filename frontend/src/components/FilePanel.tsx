@@ -1,5 +1,6 @@
 // 左面板：Obsidian 式「目录+文件混合树」+ 全库搜索 + 排序
 // 顶部显示 Vault 名；树从根目录内容开始（顶层文件夹+根文件）；节点文字单行省略号。
+import "./FilePanel.css";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Empty, Input, Segmented, Spin, Tree } from "antd";
 import { FolderOpenOutlined, FolderOutlined } from "@ant-design/icons";
