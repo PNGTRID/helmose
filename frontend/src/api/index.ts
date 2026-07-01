@@ -155,12 +155,23 @@ export async function exportLifeState(vaultId: string): Promise<AgentExport> {
 // Obsidian 式能力：编辑 / 反向链接 / 图谱 / 标签 / 文件监听
 // ============================================================
 
-/** 保存笔记内容（写回 vault 原文 + 自动备份 + 增量重索引） */
+/** 保存笔记内容（写回 vault 原文 + 自动备份 + 增量重索引）。
+ *  注意：content 会原样写盘，含 fm 才保留 fm；WYSIWYG 编辑正文应改用 saveNoteBody。 */
 export async function saveNoteContent(
   noteId: string,
   content: string
 ): Promise<NoteContent> {
   return invoke<NoteContent>('save_note_content', { noteId, content });
+}
+
+/** 保存笔记正文（保留原 frontmatter）：读盘取原 fm → 拼接新正文 → 备份+写盘+索引。
+ *  WYSIWYG 编辑器只编辑正文（raw_content 已去 fm），用此命令保存不会丢 fm。
+ *  返回 NoteContent.raw_content = 正文（与 getNoteContent 一致）。 */
+export async function saveNoteBody(
+  noteId: string,
+  body: string
+): Promise<NoteContent> {
+  return invoke<NoteContent>('save_note_body', { noteId, body });
 }
 
 /** 切换任务完成态（改 checkbox [ ]↔[x] 写回 vault + 索引；source_line 1-based） */
@@ -170,6 +181,51 @@ export async function toggleTask(
   done: boolean
 ): Promise<NoteContent> {
   return invoke<NoteContent>('toggle_task', { noteId, sourceLine, done });
+}
+
+/** 就地改写笔记某一行（task/event 文本编辑；sourceLine 1-based，基于去 fm 正文） */
+export async function updateLine(
+  noteId: string,
+  sourceLine: number,
+  newText: string
+): Promise<NoteContent> {
+  return invoke<NoteContent>('update_line', { noteId, sourceLine, newText });
+}
+
+/** 就地删除笔记某一行（task/event 单条删除；删前 save 已备份到 .helmose/backup） */
+export async function deleteLine(
+  noteId: string,
+  sourceLine: number
+): Promise<NoteContent> {
+  return invoke<NoteContent>('delete_line', { noteId, sourceLine });
+}
+
+/** 向指定 section 末尾追加 bullet（asTask=true 任务 `- [ ]`，false 事件 `-`） */
+export async function appendBullet(
+  noteId: string,
+  section: string,
+  text: string,
+  asTask: boolean
+): Promise<NoteContent> {
+  return invoke<NoteContent>('append_bullet', { noteId, section, text, asTask });
+}
+
+/** 改 frontmatter 指定键（value 支持 string/number/bool；保留其余原文不破坏） */
+export async function patchFrontmatter(
+  noteId: string,
+  key: string,
+  value: string | number | boolean
+): Promise<NoteContent> {
+  return invoke<NoteContent>('patch_frontmatter', { noteId, key, value });
+}
+
+/** 操作 frontmatter tags 数组（value=null 删除该前缀 tag；mainline 用 value===tagPrefix 表无值 tag） */
+export async function setTag(
+  noteId: string,
+  tagPrefix: string,
+  value: string | null
+): Promise<NoteContent> {
+  return invoke<NoteContent>('set_tag', { noteId, tagPrefix, value });
 }
 
 /** 删除笔记（软删除到 .helmose/trash 可恢复 + DB 级联清除），返回 trash 路径 */

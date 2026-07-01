@@ -27,6 +27,7 @@ helmose/
 │       ├── stores/
 │       │   ├── vault.ts         # Zustand：当前 vault + 索引状态
 │       │   └── tabs.ts          # Zustand：标签页 / 面板开关 / 命令面板
+│       │   └── theme.ts         # Zustand：暗色模式（antd darkAlgorithm + localStorage 持久化）
 │       ├── hooks/
 │       │   ├── useAllNotesMeta.ts
 │       │   └── useWikilinkNavigation.ts
@@ -38,6 +39,7 @@ helmose/
 │       │   ├── ForceGraph                                             # 关系图谱（d3-force）
 │       │   ├── CommandPalette                                         # Ctrl/⌘+P 命令面板（含全库搜索）
 │       │   └── DataState                                              # 列表三态（loading/error/empty）
+│       │   └── ErrorBoundary                                          # content 区错误捕获（单页崩不白屏）
 │       └── pages/
 │           ├── OnboardingPage.tsx   # 选/建 vault 引导
 │           ├── TodayPage.tsx        # 今日聚焦（统计 + 待办）
@@ -53,15 +55,17 @@ helmose/
         ├── main.rs              # 入口：插件注册 + invoke_handler 命令注册
         ├── commands/            # Tauri 命令层（IPC 边界）
         │   ├── mod.rs
-        │   ├── vault.rs         # vault CRUD / onboarding
+        │   ├── vault.rs         # vault CRUD / onboarding / reset_app（重置安装，不碰 vault 原文）
         │   ├── index.rs         # 全量索引 index_vault + start_watcher + should_reindex
-        │   ├── notes.rs         # 笔记查询 get_notes / get_notes_stats / get_tags_stats
-        │   ├── library.rs       # 文档库：list_dirs / list_notes_meta / list_all_notes_meta / get_note_content / save_note_content / get_backlinks / get_graph_data
+        │   ├── notes.rs         # 笔记查询 + CRUD：get_notes / get_notes_stats / get_tags_stats / create_note / create_today_note / delete_note（软删除回收站）
+        │   ├── library.rs       # 文档库：list_dirs / list_notes_meta / list_all_notes_meta / get_note_content / save_note_content（写前备份）/ get_backlinks / get_forward_links / get_graph_data / list_notes_by_tag / toggle_task / list_trash / clear_trash / list_backups / delete_backup
         │   ├── tasks.rs         # 任务查询 get_tasks
         │   ├── projects.rs      # 项目查询 get_projects
+        │   ├── events.rs        # 事件查询 list_events
         │   ├── search.rs        # 全库搜索 search_notes（FTS5）
-        │   ├── scaffold.rs      # 脚手架 scaffold_vault（新建 Life OS 骨架）
-        │   └── life_state.rs    # Agent 状态导出 export_life_state（写 app_data_dir/agent/）
+        │   ├── scaffold.rs      # 脚手架 scaffold_vault（新建 Life OS 骨架 + 12 种 type 填写引导模板）
+        │   ├── life_state.rs    # Agent 状态导出 export_life_state + get_tomorrow_sentence（写 app_data_dir/agent/）
+        │   └── update.rs        # 自动更新 check_update（tauri-plugin-updater）
         ├── models/              # DTO（与 SQLite schema 对齐，供 IPC 序列化）
         │   ├── mod.rs
         │   ├── vault.rs
@@ -76,16 +80,18 @@ helmose/
         │   ├── database.rs      # Database（统一访问 + schema 初始化）
         │   ├── database_sqlite.rs  # SqliteDatabase（rusqlite 封装，WAL/Mutex）
         │   ├── contract/        # 结构契约（取代旧 layers.rs）
-        │   │   └── mod.rs       # 规范.md 契约：顶层目录 / 11 种 type / type→dir / infer_note_type / infer_layer
+        │   │   └── mod.rs       # 规范.md 契约：顶层目录 / 12 种 type（含 log）/ type→dir / infer_note_type / infer_layer
         │   ├── watcher.rs       # notify 文件监听（驱动增量索引）
         │   └── indexer/         # 解析引擎（分层调度）
         │       ├── mod.rs       # parse_file：拼装 ParsedNote（含 content_hash）
         │       ├── frontmatter.rs
         │       ├── incremental.rs  # 增量索引（按 content_hash 判变）
-        │       ├── projects.rs     # 项目维度解析
-        │       ├── sections.rs
-        │       ├── tasks.rs
-        │       └── wikilinks.rs
+        │       ├── projects.rs     # 项目维度解析（priority / mainline / top-3 兜底 / okr_priority / last_activity）
+        │       ├── events.rs       # 关键事件 / 时间线 bullet 提取
+        │       ├── tasks.rs        # 任务 + due_date（📅 / due: / 截止: / deadline 标记）
+        │       ├── tomorrow.rs     # 明日一句提取
+        │       ├── sections.rs     # section 切分
+        │       └── wikilinks.rs    # [[wikilink]] 解析
         └── utils/
             ├── mod.rs
             ├── dates.rs         # 日期归一化 / ISO 周

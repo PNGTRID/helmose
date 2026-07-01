@@ -19,7 +19,8 @@
 - `pulldown-cmark` 0.11（`default-features=false, features=["html"]`）：markdown → HTML 渲染（文档库预览）。
 - `gray_matter` 0.2：frontmatter 解析。
 - `notify` 6 / `notify-debouncer-mini` 0.4：vault 文件监听，**增量索引已启用**（`watcher.rs` + `incremental.rs` + `start_watcher` 命令）。
-- `sha2` 0.10：笔记正文 sha256 `content_hash`（增量判定 + 唯一性键）。
+- `sha2` 0.10：笔记正文 sha256 `content_hash`（note 主键 + 增量判定）。
+- `tauri-plugin-updater`：自动更新（`check_update` 命令 + SettingsPage 按钮；endpoint/pubkey 发布时配真实值）。
 - `once_cell` / `parking_lot` 0.12 / `crossbeam-channel` 0.5：全局状态 / 锁 / watcher 通道。
 - `anyhow` 1 / `thiserror` 1 / `tracing` 0.1 + `tracing-subscriber` 0.3：错误处理与日志。
 - `regex` 1 / `chrono` 0.4 / `uuid` 1.0：工具库。
@@ -107,12 +108,15 @@ IPC 边界约定：Tauri v2 自动做参数名 `camelCase ↔ snake_case` 转换
 3. **分层解析（L1/L2/L3）**：wiki 数据结构化程度不一（高结构业务/半结构学习/零结构日志），单一解析器硬套会丢信息；按路径前缀分派不同解析策略。
 4. **markdown 渲染放 Rust 端（pulldown-cmark）而非前端 JS 库**：复用既有 Rust 依赖、零前端新增包、后端渲染性能好、默认安全转义。
 5. **`pulldown-cmark` 启用 `html` feature**：`default-features=false` 会关掉 `html` 模块，必须显式 `features=["html"]` 才能用 `pulldown_cmark::html`。
-6. **契约取代 `layers.rs` 硬编码**：旧 `layers.rs` 用编号前缀（0-日志/1-我/…）判层级，目录重构即失效。现改为 `services/contract/mod.rs` 内置 ~/wiki/规范.md 契约（顶层目录 + 11 种 type + type→dir 映射），`infer_note_type` / `infer_layer` 纯函数驱动，indexer 与 scaffold 共用同一真相源。
+6. **契约取代 `layers.rs` 硬编码**：旧 `layers.rs` 用编号前缀（0-日志/1-我/…）判层级，目录重构即失效。现改为 `services/contract/mod.rs` 内置 ~/wiki/规范.md 契约（顶层目录 + 12 种 type（含 log）+ type→dir 映射），`infer_note_type` / `infer_layer` 纯函数驱动，indexer 与 scaffold 共用同一真相源。
 7. **排除目录收口到 `utils/exclude.rs`**：原本 `index.rs` / `library.rs` 各持一份 `EXCLUDE_DIRS` 易漂移；现统一为单一契约点，三处调用方共用 `is_excluded_*`。
-8. **`content_hash`(sha256) 作增量判定键**：正文 sha256 入库，watcher 触发时按 hash 跳过未变文件，避免全量重算；同时作 notes 唯一性辅助键。
+8. **`content_hash`(sha256) 作 note 主键**：正文 sha256（规范化：去 BOM / LF 统一 / 去 trailing 空白）作 `notes.id` 主键，移动 / 重命名不变 id；watcher 增量按 hash 跳过未变文件。碰撞（重复内容）加 `#短哈希` 消歧，`notes.content_hash` 列始终存纯 hash。
 
 ## Known Limitations
-- **wikilink `[[x]]` 暂按字面文本显示**：文档库预览未做 wikilink 预处理，不能点击跳转（列入后续）。
-- **目录树无虚拟滚动**：极深/极多目录时渲染可能变慢（当前 vault 目录规模可接受）。
-- **AI 教练层未接（v0.2）**：当前版本无 LLM 调用；`export_life_state` 已能产出机器可读 `state.json`，但主线判定 / 每日建议尚待 v0.2 接入。
+- **okrs 表未填充**：`okrs` 表 schema 已建（`services/database.rs`），但缺 indexer 解析与命令查询（OKR/key-result 全链路留后续 spec）。
+- **AI 教练层未接（v0.2）**：当前版本无 LLM 调用；`export_life_state` 已产出机器可读 `state.json`，但主线判定 / 每日建议 / 明日一句的 AI 生成尚待 v0.2。
 - **Agent inbox 写回未实现**：状态导出已落地，外部智能体产出的写回审核流待做。
+- **可视化编辑未做**：当前为 CodeMirror 文本编辑 + 写回；按 type 的可视化编辑（OKR 进度条 / 项目看板）留后续。
+- **移动/重命名移动感知未做**：反链 / 前向链已实现，但 Move/Rename 命令 + 引用自动更新留后续。
+- **updater endpoint/pubkey 占位**：自动更新框架已接（`tauri-plugin-updater` + `check_update` 命令 + SettingsPage 按钮），真实 endpoint/pubkey 发布时配。
+- **bundle 未拆分**：vendor 未 manualChunks 拆分（当前 1.78MB，桌面应用本地加载可接受）。

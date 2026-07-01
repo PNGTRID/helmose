@@ -44,7 +44,12 @@ pub fn parse_file(rel_path: &str, content: &str, mtime: i64) -> ParsedNote {
     let fm_type = fm.data.get("type").and_then(|v| v.as_str());
     let note_type = crate::services::contract::infer_note_type(rel_path, fm_type);
     let layer = crate::services::contract::infer_layer(note_type.as_deref());
-    let sections = sections::split_sections(&fm.content);
+    // 带行号切分（events 行级定位用）；tasks/tomorrow 仍用 HashMap（不改其签名）
+    let sections_vec = sections::split_sections_with_lines(&fm.content);
+    let sections: std::collections::HashMap<String, String> = sections_vec
+        .iter()
+        .map(|s| (s.name.clone(), s.body.clone()))
+        .collect();
     let file_name = file_name_of(rel_path);
 
     // title: frontmatter.title > H1 > 文件名(去扩展名)
@@ -82,7 +87,7 @@ pub fn parse_file(rel_path: &str, content: &str, mtime: i64) -> ParsedNote {
 
     let wikilink_list = wikilinks::extract(&fm.content);
     // 事件：从「关键事件 / 事件 / 时间线 / 里程碑」section 提取，event_date 复用 date_iso
-    let event_list = events::extract(date_iso.as_deref(), &sections);
+    let event_list = events::extract(date_iso.as_deref(), &sections_vec);
     // 明日一句：从「明日一句 / 每日一句」section 提取一句话
     let tomorrow_sentence = tomorrow::extract(&sections);
     // content_hash 在 fm.content move 进 raw_content 之前算好（sha256 规范化正文）

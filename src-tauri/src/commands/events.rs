@@ -16,6 +16,7 @@ fn row_to_event(row: &rusqlite::Row) -> rusqlite::Result<Event> {
         output: row.get("output")?,
         project_id: row.get("project_id")?,
         raw_bullet: row.get("raw_bullet")?,
+        source_line: row.get("source_line")?,
     })
 }
 
@@ -29,7 +30,7 @@ pub fn list_events(
     db: State<'_, Database>,
 ) -> Result<Vec<Event>, String> {
     let mut sql = String::from(
-        "SELECT id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet \
+        "SELECT id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet,source_line \
          FROM events WHERE vault_id = ?1",
     );
     let mut pv: Vec<&dyn rusqlite::ToSql> = vec![&vault_id];

@@ -1,16 +1,13 @@
-// 笔记编辑模式：CodeMirror + marked 实时预览分屏 + 保存/取消。从 NoteView 拆出。
-// save 走 api.saveNoteContent（写 vault + .helmose/backup 备份），成功后回调 onSave(updated)。
-import "./NoteEditor.css";
+// 笔记编辑模式：Tiptap WYSIWYG 富文本编辑（所见即所得，不显示 ## ** 等 md 符号）+ 保存/取消。
+// rawContent 是「去 fm 正文」（与 getNoteContent 同源），RichEditor 只编辑正文；
+// 保存走 api.saveNoteBody（读盘拼回原 frontmatter，不丢 type/tags/created），成功后回调 onSave(updated)。
+// Ctrl/Cmd+S 快捷保存（RichEditor 内 handleKeyDown 拦截 → onSaveShortcut）。
 import { useState } from "react";
 import { Button, Space, message } from "antd";
 import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
-import CodeMirror from "@uiw/react-codemirror";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { keymap } from "@codemirror/view";
-import { marked } from "marked";
 import * as api from "../api";
-import { useThemeStore } from "../stores/theme";
 import type { NoteContent } from "../types";
+import RichEditor from "./RichEditor";
 
 interface Props {
   noteId: string;
@@ -20,15 +17,15 @@ interface Props {
 }
 
 export default function NoteEditor({ noteId, rawContent, onSave, onCancel }: Props) {
-  // 挂载时以 rawContent 初始化 draft（等价原 NoteView 切编辑时的 setDraft(content.raw_content)）
+  // 挂载时以 rawContent（正文）初始化 draft
   const [draft, setDraft] = useState(rawContent);
   const [saving, setSaving] = useState(false);
-  const appTheme = useThemeStore((s) => s.theme);
 
   const save = async () => {
     setSaving(true);
     try {
-      const updated = await api.saveNoteContent(noteId, draft);
+      // saveNoteBody：读盘取原 fm → 拼接新正文 → 备份 + 写盘 + 增量索引（不丢 frontmatter）
+      const updated = await api.saveNoteBody(noteId, draft);
       onSave(updated);
       message.success("已保存（自动备份到 .helmose/backup）");
     } catch (e) {
@@ -56,48 +53,7 @@ export default function NoteEditor({ noteId, rawContent, onSave, onCancel }: Pro
           </Button>
         </Space>
       </div>
-      <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
-        <div className="ob-editor-wrap" style={{ flex: 1, minWidth: 0 }}>
-          <CodeMirror
-            value={draft}
-            onChange={(val) => setDraft(val)}
-            extensions={[
-              markdown({ base: markdownLanguage }),
-              keymap.of([
-                { key: "Mod-s", preventDefault: true, run: () => { void save(); return true; } },
-              ]),
-            ]}
-            theme={appTheme === "dark" ? "dark" : "light"}
-            basicSetup={{
-              lineNumbers: false,
-              foldGutter: true,
-              highlightActiveLine: false,
-              highlightActiveLineGutter: false,
-            }}
-            style={{
-              fontSize: 14,
-              fontFamily: '"SFMono-Regular", Menlo, Consolas, monospace',
-            }}
-          />
-        </div>
-        <div
-          className="ob-preview-pane"
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: "auto",
-            border: "1px solid var(--ob-border)",
-            borderRadius: 6,
-            padding: 20,
-            background: "var(--ob-bg)",
-          }}
-        >
-          <div
-            className="md-preview"
-            dangerouslySetInnerHTML={{ __html: marked.parse(draft) as string }}
-          />
-        </div>
-      </div>
+      <RichEditor value={draft} onChange={setDraft} onSaveShortcut={save} />
     </div>
   );
 }

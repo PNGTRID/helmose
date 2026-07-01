@@ -40,6 +40,23 @@ impl Database {
                 .execute(stmt, &[])
                 .map_err(|e| format!("schema init failed: {:?} | sql: {}", e, &stmt[..stmt.len().min(80)]))?;
         }
+        // 老库 migration（CREATE TABLE IF NOT EXISTS 不会给已存在的表加列）
+        self.migrate()?;
+        Ok(())
+    }
+
+    /// 幂等 migration：检查列是否存在，缺则 ALTER ADD COLUMN。新库 SCHEMA 自带列会跳过。
+    fn migrate(&self) -> Result<(), String> {
+        // events.source_line（inline-crud 新增，供事件就地编辑/删除定位原文行）
+        let cols: Vec<String> = self
+            .sqlite()
+            .query_map("PRAGMA table_info(events)", &[], |r| r.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        if !cols.iter().any(|c| c == "source_line") {
+            self.sqlite()
+                .execute("ALTER TABLE events ADD COLUMN source_line INTEGER", &[])
+                .map_err(|e| format!("migrate events.source_line failed: {:?}", e))?;
+        }
         Ok(())
     }
 }
@@ -105,7 +122,8 @@ CREATE TABLE IF NOT EXISTS events (
   content TEXT,
   output TEXT,
   project_id TEXT,
-  raw_bullet TEXT
+  raw_bullet TEXT,
+  source_line INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date);
 

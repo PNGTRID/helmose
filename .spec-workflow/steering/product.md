@@ -59,5 +59,7 @@ Helmose（helm = 舵手）是一个 **AI 驱动的人生知识库桌面应用**�
 
 ### Potential Enhancements
 - **AI 教练层（v0.2）**：主线判定、每日教练建议、明日一句。
-- **wikilink 可点跳转**：文档库预览中的 `[[wikilink]]` 点击跳转到目标笔记。
 - **Agent 写回 inbox**：外部智能体产出经审核后写入 vault。
+- **可视化编辑**：按 type 路由（OKR 进度条 / 项目看板 / 任务勾选），结构化写回 markdown。
+- **okrs 全链路**：OKR / key-result 解析 + 查询 + 看板（`okrs` 表 schema 已就绪，待 indexer 填充）。
+- **引用完整性移动感知**：Move / Rename 命令 + 路径型引用自动更新（不断链）。

@@ -1,18 +1,19 @@
 // 今日聚焦（教练面板）：聚合「今日待办 / 今日事件 / 主线项目 / 索引统计」四张卡片。
 // 数据源：tasks(undone) + events(today) + projects(is_mainline) + stats(已有)。
-// 今日待办 = 未完成 task 且其源笔记 date_iso == 今天（绕开 due_date 未填的坑，用「今日笔记的待办」语义）。
-// 每卡片点击跳对应页（openView）；主线项目卡片内项目可点开笔记。
-// 竞态：useEffect 用 cancelled flag 守卫；watcherTick/stats 变化驱动刷新。
+// 就地 CRUD：今日事件 InlineAdd 新建 + 行内 InlineEdit/删除；今日待办勾选 + InlineEdit/删除。
+// 今日笔记按钮 / 主线项目点击 → NoteEditorDrawer（不跳 tab）。竞态：useEffect cancelled flag。
 
 import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Empty,
   List,
   message,
+  Popconfirm,
   Row,
   Space,
   Statistic,
@@ -23,6 +24,7 @@ import {
   CalendarOutlined,
   CheckSquareOutlined,
   CompassOutlined,
+  DeleteOutlined,
   FileAddOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
@@ -32,7 +34,9 @@ import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import { dateKey } from "../utils/date";
-import { openNoteFromMeta, openOrCreateTodayNote } from "../utils/note";
+import InlineEdit from "../components/InlineEdit";
+import InlineAdd from "../components/InlineAdd";
+import NoteEditorDrawer from "../components/NoteEditorDrawer";
 import type { Event, Project, Task } from "../types";
 
 const { Text } = Typography;
@@ -47,6 +51,7 @@ export default function TodayPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [yesterdaySentence, setYesterdaySentence] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [drawerNoteId, setDrawerNoteId] = useState<string | null>(null);
 
   const today = dayjs().format("YYYY-MM-DD");
 
@@ -95,7 +100,7 @@ export default function TodayPage() {
   const todayNoteIds = new Set(
     notes.filter((n) => dateKey(n.date_iso) === today).map((n) => n.id)
   );
-  // 今日待办：due_date==今天，或来自今日笔记的未完成 task（两路并集，due_date 现已由索引器解析）
+  // 今日待办：due_date==今天，或来自今日笔记的未完成 task（两路并集）
   const todayTasks = tasks.filter(
     (t) => t.due_date === today || todayNoteIds.has(t.note_id)
   );
@@ -105,13 +110,75 @@ export default function TodayPage() {
   const goTo = (type: "tasks" | "calendar" | "projects", title: string) =>
     useTabsStore.getState().openView(type, title);
 
-  // 打开或创建今日笔记（util 封装后端 create_today_note，TodayPage/命令面板/Ctrl+J 共用）。
+  // 打开或创建今日笔记（抽屉编辑，不跳 tab）
   const openOrCreateToday = async () => {
     try {
-      await openOrCreateTodayNote();
-      message.success("已打开/创建今日笔记");
+      const nc = await api.createTodayNote(vault.id);
+      setDrawerNoteId(nc.id);
     } catch (e) {
       message.error(`操作失败：${e}`);
+    }
+  };
+
+  // —— 事件就地 CRUD（追加到今日笔记「关键事件」section）——
+  const onAddEvent = async (text: string) => {
+    try {
+      const todayNc = await api.createTodayNote(vault.id);
+      await api.appendBullet(todayNc.id, "关键事件", text, false);
+      message.success("已新建事件");
+      await refresh();
+    } catch (e) {
+      message.error(`新建失败：${e}`);
+    }
+  };
+  const onEditEvent = async (ev: Event, newText: string) => {
+    if (ev.source_line == null) return;
+    try {
+      await api.updateLine(ev.note_id, ev.source_line, `- ${newText}`);
+      await refresh();
+    } catch (e) {
+      message.error(`编辑失败：${e}`);
+    }
+  };
+  const onDeleteEvent = async (ev: Event) => {
+    if (ev.source_line == null) return;
+    try {
+      await api.deleteLine(ev.note_id, ev.source_line);
+      message.success("已删除");
+      await refresh();
+    } catch (e) {
+      message.error(`删除失败：${e}`);
+    }
+  };
+
+  // —— 今日待办就地编辑/删除/勾选 ——
+  const onToggleTask = async (t: Task, done: boolean) => {
+    if (t.source_line == null) return;
+    try {
+      await api.toggleTask(t.note_id, t.source_line, done);
+      await refresh();
+    } catch (e) {
+      message.error(`勾选失败：${e}`);
+    }
+  };
+  const onEditTask = async (t: Task, newText: string) => {
+    if (t.source_line == null) return;
+    const prefix = t.done ? "- [x] " : "- [ ] ";
+    try {
+      await api.updateLine(t.note_id, t.source_line, prefix + newText);
+      await refresh();
+    } catch (e) {
+      message.error(`编辑失败：${e}`);
+    }
+  };
+  const onDeleteTask = async (t: Task) => {
+    if (t.source_line == null) return;
+    try {
+      await api.deleteLine(t.note_id, t.source_line);
+      message.success("已删除");
+      await refresh();
+    } catch (e) {
+      message.error(`删除失败：${e}`);
     }
   };
 
@@ -135,18 +202,10 @@ export default function TodayPage() {
         </Col>
       </Row>
       <Space>
-        <Button
-          type="primary"
-          icon={<FileAddOutlined />}
-          onClick={openOrCreateToday}
-        >
+        <Button type="primary" icon={<FileAddOutlined />} onClick={openOrCreateToday}>
           今日笔记
         </Button>
-        <Button
-          icon={<ReloadOutlined />}
-          loading={indexing}
-          onClick={() => index().then(refresh)}
-        >
+        <Button icon={<ReloadOutlined />} loading={indexing} onClick={() => index().then(refresh)}>
           重新索引
         </Button>
       </Space>
@@ -193,7 +252,7 @@ export default function TodayPage() {
       )}
 
       <Row gutter={[16, 16]}>
-        {/* 今日待办 */}
+        {/* 今日待办（就地勾选/编辑/删除） */}
         <Col span={12}>
           <Card
             title={
@@ -203,9 +262,7 @@ export default function TodayPage() {
                 <Tag color="blue" style={{ margin: 0 }}>{todayTasks.length}</Tag>
               </Space>
             }
-            hoverable
             loading={loading}
-            onClick={() => goTo("tasks", "任务")}
             style={{ height: "100%" }}
           >
             {todayTasks.length === 0 ? (
@@ -216,7 +273,29 @@ export default function TodayPage() {
                 dataSource={todayTasks.slice(0, 5)}
                 renderItem={(t) => (
                   <List.Item>
-                    <Text ellipsis style={{ maxWidth: "100%" }}>{t.text}</Text>
+                    <Space style={{ width: "100%" }} align="center">
+                      {t.source_line != null && (
+                        <Checkbox
+                          checked={t.done}
+                          onChange={(e) => onToggleTask(t, e.target.checked)}
+                        />
+                      )}
+                      {t.source_line != null ? (
+                        <InlineEdit value={t.text} onSave={(nt) => onEditTask(t, nt)} />
+                      ) : (
+                        <Text ellipsis style={{ maxWidth: "100%" }}>{t.text}</Text>
+                      )}
+                      {t.source_line != null && (
+                        <Popconfirm
+                          title="删除该待办？"
+                          onConfirm={() => onDeleteTask(t)}
+                          okText="删除"
+                          cancelText="取消"
+                        >
+                          <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                        </Popconfirm>
+                      )}
+                    </Space>
                   </List.Item>
                 )}
               />
@@ -224,7 +303,7 @@ export default function TodayPage() {
           </Card>
         </Col>
 
-        {/* 今日事件 */}
+        {/* 今日事件（就地新建/编辑/删除） */}
         <Col span={12}>
           <Card
             title={
@@ -234,24 +313,44 @@ export default function TodayPage() {
                 <Tag color="green" style={{ margin: 0 }}>{events.length}</Tag>
               </Space>
             }
-            hoverable
             loading={loading}
-            onClick={() => goTo("calendar", "日历")}
             style={{ height: "100%" }}
           >
+            <InlineAdd
+              placeholder="新建事件（追加今日笔记「关键事件」）"
+              onAdd={onAddEvent}
+              style={{ marginBottom: 8 }}
+            />
             {events.length === 0 ? (
-              <Text type="secondary">今日无事件（需笔记「关键事件」section）</Text>
+              <Text type="secondary">今日无事件</Text>
             ) : (
               <List
                 size="small"
                 dataSource={events.slice(0, 5)}
                 renderItem={(ev) => (
                   <List.Item>
-                    <Space>
+                    <Space style={{ width: "100%" }} align="center">
                       {ev.event_time && <Text type="secondary">{ev.event_time}</Text>}
-                      <Text ellipsis style={{ maxWidth: 220 }}>
-                        {ev.title ?? ev.raw_bullet ?? "（未命名事件）"}
-                      </Text>
+                      {ev.source_line != null ? (
+                        <InlineEdit
+                          value={ev.raw_bullet ?? ev.title ?? ""}
+                          onSave={(nt) => onEditEvent(ev, nt)}
+                        />
+                      ) : (
+                        <Text ellipsis style={{ maxWidth: 200 }}>
+                          {ev.title ?? ev.raw_bullet ?? "（未命名事件）"}
+                        </Text>
+                      )}
+                      {ev.source_line != null && (
+                        <Popconfirm
+                          title="删除该事件？"
+                          onConfirm={() => onDeleteEvent(ev)}
+                          okText="删除"
+                          cancelText="取消"
+                        >
+                          <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                        </Popconfirm>
+                      )}
                     </Space>
                   </List.Item>
                 )}
@@ -260,7 +359,7 @@ export default function TodayPage() {
           </Card>
         </Col>
 
-        {/* 主线项目 */}
+        {/* 主线项目（点击开抽屉编辑，卡片整体跳项目页） */}
         <Col span={12}>
           <Card
             title={
@@ -287,12 +386,7 @@ export default function TodayPage() {
                   <List.Item
                     onClick={(e) => {
                       e.stopPropagation();
-                      openNoteFromMeta({
-                        id: p.note_id,
-                        title: p.name,
-                        file_name: p.name,
-                        rel_path: p.home_rel_path ?? "",
-                      });
+                      setDrawerNoteId(p.note_id);
                     }}
                   >
                     <Space>
@@ -324,6 +418,13 @@ export default function TodayPage() {
           </Card>
         </Col>
       </Row>
+
+      <NoteEditorDrawer
+        open={!!drawerNoteId}
+        noteId={drawerNoteId}
+        onClose={() => setDrawerNoteId(null)}
+        onSaved={() => refresh()}
+      />
     </Space>
   );
 }

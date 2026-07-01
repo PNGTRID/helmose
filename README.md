@@ -50,8 +50,17 @@ cd frontend && pnpm test         # vitest 单测
 
 ## 状态
 
-✅ **v0.1**：数据底座（vault 索引 + SQLite 派生缓存 + `notify` 增量监听）、文档库（目录树浏览 / CodeMirror 编辑写回 / markdown 预览 / 反向链接 / 关系图谱）、全库搜索（FTS5）、Agent 状态导出（`LIFE-STATE.md` + `state.json`）、脚手架（新建 Life OS 骨架）均已落地。
+✅ **v0.1 已落地**：
+- **数据底座**：vault 索引 + SQLite 派生缓存 + `notify` 增量监听 + 契约驱动分层解析（`content_hash` 稳定 id，移动不变）。
+- **Obsidian 式工作台**：Ribbon + 可拖拽 FilePanel（**虚拟列表**，1.9 万节点流畅）+ 标签页 + markdown 预览（wikilink `[[x]]` 可点跳转）+ CodeMirror 编辑写回（写前 `.helmose/backup` 备份）+ **反向链接 / 前向链接** + 关系图谱（d3-force）。
+- **结构化提取**：projects 深度结构化 / events 时间线 / tasks due_date / 明日一句。
+- **全库搜索**：FTS5 trigram + snippet 高亮，Ctrl/⌘+P 命令面板触发。
+- **笔记 CRUD**：创建 / 编辑写回 / 软删除回收站 + 备份管理。
+- **标签精确筛选** + **日历 / 今日聚焦 / 任务 / 项目 / 日志页**。
+- **Agent 状态接口**：`export_life_state` 写 `LIFE-STATE.md`（人读）+ `state.json`（机读）。
+- **脚手架**：新建 Life OS 目录骨架（00~09 + 12 种 type 填写引导模板）。
+- **暗色模式** + **ErrorBoundary**（单页崩不白屏）+ **自动更新框架**（updater）+ **重置安装**（reset_app，绝不碰 vault 原文）。
 
-🚧 **v0.2**：接入 AI 教练层（主线判定 / 每日建议 / 明日一句）、Agent inbox 写回。
+🚧 **v0.2 待办**：AI 教练层（主线判定 / 每日建议 / 明日一句）、Agent inbox 写回、okrs 全链路、可视化编辑（OKR/看板）。
 
 各功能的设计与任务分解见 [.spec-workflow/specs/](.spec-workflow/specs/)。

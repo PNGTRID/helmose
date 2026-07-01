@@ -240,8 +240,8 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                 for ev in &p.events {
                     tx.execute(
                         "INSERT INTO events \
-                         (id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet) \
-                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                         (id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet,source_line) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                         params![
                             uuid::Uuid::new_v4().to_string(),
                             id,
@@ -254,6 +254,7 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                             // project_id 暂不关联（M1 未做 event→project 映射，留 backlog）
                             None::<String>,
                             ev.raw_bullet,
+                            ev.source_line,
                         ],
                     )?;
                 }

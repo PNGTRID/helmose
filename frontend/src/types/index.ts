@@ -70,11 +70,18 @@ export interface NoteMeta {
   mtime: number;
 }
 
-/** 单篇笔记内容（含渲染 HTML）—— 预览面板用 */
+/** 单篇笔记内容（含渲染 HTML + frontmatter）—— 预览/编辑用 */
 export interface NoteContent {
   id: string;
   rel_path: string;
   title: string | null;
+  /** 笔记类型（字段表单按它分支） */
+  note_type: string | null;
+  /** tags 数组（字段表单读 status/mainline） */
+  tags: string[];
+  /** 原始 frontmatter（字段表单读 priority/okr/created） */
+  frontmatter: Record<string, unknown>;
+  /** 去 frontmatter 后的正文 */
   raw_content: string;
   html: string;
 }
@@ -160,6 +167,8 @@ export interface Event {
   output: string | null;
   project_id: string | null;
   raw_bullet: string | null;
+  /** bullet 在全文的行号（1-based），供就地编辑/删除定位 */
+  source_line: number | null;
 }
 
 /** 脚手架生成统计（onboarding「创建知识库」） */

@@ -1,13 +1,17 @@
-// 任务页：未完成/已完成 Tab + 按到期日期分组 + 点击查看源笔记（Drawer 预览）
-// 后端 get_tasks 已就绪（按 done 筛选），本页做分组展示与源笔记钻取。
+// 任务页：未完成/已完成 Tab + 按到期日期分组 + 就地增删改 + 点击查看源笔记（Drawer 预览）
+// 就地 CRUD：顶部 InlineAdd 新建（追加到今日笔记「今日待办」）、行内 InlineEdit 改文本、
+// 删除按钮删单行、Checkbox 勾选（已有）。仅 source_line!=null 的 checkbox 类任务支持就地编辑。
 
 import { useEffect, useMemo, useState } from "react";
-import { Card, Checkbox, Drawer, List, message, Space, Spin, Tabs, Tag, Typography } from "antd";
+import { Button, Card, Checkbox, Drawer, List, message, Popconfirm, Space, Spin, Tabs, Tag, Typography } from "antd";
+import { DeleteOutlined } from "@ant-design/icons";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useWikilinkNavigation } from "../hooks/useWikilinkNavigation";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import DataState from "../components/DataState";
+import InlineEdit from "../components/InlineEdit";
+import InlineAdd from "../components/InlineAdd";
 import type { NoteContent, NoteMeta, Task } from "../types";
 
 const { Text, Title } = Typography;
@@ -124,6 +128,43 @@ export default function TasksPage() {
     }
   };
 
+  // 就地新建任务：追加到今日笔记「今日待办」section（今日笔记已存在则复用，无则创建）
+  const onAddTask = async (text: string) => {
+    if (!vault) return;
+    try {
+      const today = await api.createTodayNote(vault.id);
+      await api.appendBullet(today.id, "今日待办", text, true);
+      message.success("已新建任务");
+      await refresh();
+    } catch (e) {
+      message.error(`新建失败：${e}`);
+    }
+  };
+
+  // 就地编辑任务文本（保留 checkbox 前缀 + done 态；注：编辑会丢弃行内 due/bold 标记，backlog）
+  const onEditTask = async (t: Task, newText: string) => {
+    if (t.source_line == null) return;
+    const prefix = t.done ? "- [x] " : "- [ ] ";
+    try {
+      await api.updateLine(t.note_id, t.source_line, prefix + newText);
+      await refresh();
+    } catch (e) {
+      message.error(`编辑失败：${e}`);
+    }
+  };
+
+  // 就地删除任务（删 vault 原文对应行，删前 save 链路已备份）
+  const onDeleteTask = async (t: Task) => {
+    if (t.source_line == null) return;
+    try {
+      await api.deleteLine(t.note_id, t.source_line);
+      message.success("已删除");
+      await refresh();
+    } catch (e) {
+      message.error(`删除失败：${e}`);
+    }
+  };
+
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,6 +204,13 @@ export default function TasksPage() {
             { key: "done", label: "已完成" },
           ]}
         />
+        {tab === "open" && (
+          <InlineAdd
+            placeholder="新建任务（回车追加到今日笔记「今日待办」）"
+            onAdd={onAddTask}
+            style={{ marginBottom: 12 }}
+          />
+        )}
         <DataState
           loading={loading}
           empty={groups.length === 0}
@@ -206,7 +254,14 @@ export default function TasksPage() {
                                 onChange={(e) => onToggle(t, e.target.checked)}
                               />
                             )}
-                            <span>{t.done ? "✓ " : ""}{t.text}</span>
+                            {t.source_line != null ? (
+                              <InlineEdit
+                                value={t.text}
+                                onSave={(nt) => onEditTask(t, nt)}
+                              />
+                            ) : (
+                              <span>{t.done ? "✓ " : ""}{t.text}</span>
+                            )}
                           </Space>
                         }
                         description={
@@ -222,6 +277,23 @@ export default function TasksPage() {
                               <Text type="secondary" style={{ fontSize: 12 }}>
                                 {noteById.get(t.note_id)?.file_name}
                               </Text>
+                            )}
+                            {t.source_line != null && (
+                              <Popconfirm
+                                title="删除该任务？"
+                                description="将从源笔记删除这一行（删前已自动备份）"
+                                onConfirm={() => onDeleteTask(t)}
+                                okText="删除"
+                                cancelText="取消"
+                              >
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </Popconfirm>
                             )}
                             <Text type="secondary" style={{ fontSize: 12 }}>
                               点击查看源笔记

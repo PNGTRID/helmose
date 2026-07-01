@@ -44,6 +44,12 @@ pub struct NoteContent {
     pub id: String,
     pub rel_path: String,
     pub title: Option<String>,
+    /// 笔记类型（frontmatter.type 优先 + 目录反查），字段表单按它分支渲染
+    pub note_type: Option<String>,
+    /// tags 数组（字段表单读 status/mainline 用）
+    pub tags: Vec<String>,
+    /// 原始 frontmatter（字段表单读 priority/okr/created 用）
+    pub frontmatter: serde_json::Value,
     /// 去 frontmatter 后的原文（前端可切换"渲染/原文"视图）
     pub raw_content: String,
     /// pulldown-cmark 渲染后的 HTML（GFM 表格/任务列表/删除线已启用）

@@ -221,39 +221,55 @@ pub fn list_notes_by_tag(
     list_notes_by_tag_inner(&vault_id, &tag, limit, db.inner())
 }
 
-/// 取单篇笔记正文 + pulldown-cmark 渲染的 HTML（预览面板用）。
-#[tauri::command]
-pub fn get_note_content(
-    note_id: String,
-    db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+/// 从 DB 查单篇笔记完整 NoteContent（含 note_type/tags/frontmatter + 渲染 HTML）。
+/// 统一 get_note_content / create / save 链路的返回构造（DRY）。找不到 → Err。
+fn fetch_note_content(note_id: &str, db: &Database) -> Result<NoteContent, String> {
     let row = db
         .sqlite()
         .query_row(
-            "SELECT id,rel_path,title,raw_content FROM notes WHERE id = ?1",
+            "SELECT id,rel_path,title,note_type,tags,frontmatter,raw_content \
+             FROM notes WHERE id = ?1",
             params![note_id],
-            |row| {
+            |r| {
+                let tags_json: String = r.get("tags")?;
+                let fm_json: String = r.get("frontmatter")?;
                 Ok((
-                    row.get::<_, String>("id")?,
-                    row.get::<_, String>("rel_path")?,
-                    row.get::<_, Option<String>>("title")?,
-                    row.get::<_, Option<String>>("raw_content")?,
+                    r.get::<_, String>("id")?,
+                    r.get::<_, String>("rel_path")?,
+                    r.get::<_, Option<String>>("title")?,
+                    r.get::<_, Option<String>>("note_type")?,
+                    tags_json,
+                    fm_json,
+                    r.get::<_, Option<String>>("raw_content")?.unwrap_or_default(),
                 ))
             },
         )
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("note {} not found", note_id))?;
-
-    let raw_content = row.3.unwrap_or_default();
+    let (id, rel_path, title, note_type, tags_json, fm_json, raw_content) = row;
+    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+    let frontmatter: serde_json::Value =
+        serde_json::from_str(&fm_json).unwrap_or_else(|_| serde_json::json!({}));
     let html = render_markdown(&raw_content);
-
     Ok(NoteContent {
-        id: row.0,
-        rel_path: row.1,
-        title: row.2,
+        id,
+        rel_path,
+        title,
+        note_type,
+        tags,
+        frontmatter,
         raw_content,
         html,
     })
+}
+
+/// 取单篇笔记正文 + frontmatter + 渲染 HTML（预览/编辑用）。
+#[tauri::command]
+pub fn get_note_content(
+    note_id: String,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    fetch_note_content(&note_id, db.inner())
 }
 
 /// 保存笔记内容核心逻辑（可被集成测试直接调用，绕过 Tauri State）。
@@ -307,15 +323,17 @@ pub fn save_note_content_inner(
     incremental::upsert_rel(db, &vault_id, &rel_path, content, Some(&abs))
         .map_err(|e| e.to_string())?;
 
-    // 5. 返回最新 NoteContent（重新渲染 HTML）
-    let html = render_markdown(content);
-    Ok(NoteContent {
-        id: note_id.to_string(),
-        rel_path,
-        title: None, // 编辑后标题可能变，前端用 selected 显示
-        raw_content: content.to_string(),
-        html,
-    })
+    // 5. 返回最新 NoteContent：save 后 id 随 content_hash 变，按 (vault_id, rel_path) 查当前 id → fetch 全字段
+    let new_id: String = db
+        .sqlite()
+        .query_row(
+            "SELECT id FROM notes WHERE vault_id = ?1 AND rel_path = ?2",
+            params![vault_id, rel_path],
+            |r| r.get::<_, String>(0),
+        )
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("save 后未找到笔记：{}", rel_path))?;
+    fetch_note_content(&new_id, db)
 }
 
 /// 保存笔记内容（写回 vault md 原文 + 自动备份 + 增量重索引）。
@@ -329,6 +347,30 @@ pub fn save_note_content(
     save_note_content_inner(&note_id, &content, db.inner())
 }
 
+/// 只更新笔记正文（保留原 frontmatter 不变）。
+/// 动机：getNoteContent 返回的 raw_content 是「去 fm 正文」（与 frontmatter::parse.content 同源），
+/// WYSIWYG 编辑器只编辑正文；若直接 save_note_content(正文) 写盘会丢失 frontmatter
+/// （type/tags/created 全丢）。故读盘取原 fm → reassemble 拼回新正文 → 复用 save 链路
+/// （备份+写盘+索引），与 toggle_task / update_line 同构。返回 NoteContent.raw_content = 正文
+/// （与 get_note_content 一致，前端 RichEditor 可直接复用）。
+pub fn save_note_body_inner(note_id: &str, body: &str, db: &Database) -> Result<NoteContent, String> {
+    let full = read_full(note_id, db)?;
+    let new_full = reassemble(&full, body);
+    // save_note_content_inner 内部 upsert 后 fetch，返回完整 NoteContent
+    // （raw=正文、note_type/tags/frontmatter 全，与 get_note_content 同源）
+    save_note_content_inner(note_id, &new_full, db)
+}
+
+/// 保存笔记正文（保留 frontmatter）。WYSIWYG 编辑器（去 fm 正文）保存触发。
+#[tauri::command]
+pub fn save_note_body(
+    note_id: String,
+    body: String,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    save_note_body_inner(&note_id, &body, db.inner())
+}
+
 /// 切换任务完成态核心逻辑：改 source_line 行的 checkbox（[ ]↔[x]）→ 复用 save（备份+写+索引）。
 /// 用户在任务列表直接打勾，免开笔记编辑。铁律：用户动作触发 + save 带备份保护。
 pub fn toggle_task_inner(
@@ -337,22 +379,15 @@ pub fn toggle_task_inner(
     done: bool,
     db: &Database,
 ) -> Result<NoteContent, String> {
-    // 1. 查 raw_content
-    let raw: String = db
-        .sqlite()
-        .query_row(
-            "SELECT raw_content FROM notes WHERE id = ?1",
-            params![note_id],
-            |r| r.get::<_, String>(0),
-        )
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("note {} not found", note_id))?;
-    // 2. 按 1-based 行号改该行 checkbox（首个匹配）
-    let mut lines: Vec<String> = raw.lines().map(String::from).collect();
+    // 读盘完整文件 + 取正文（去 fm，source_line 与之同源）——避免写回丢失 frontmatter
+    let full = read_full(note_id, db)?;
+    let body = body_of(&full);
+    // 按 1-based 行号改该行 checkbox（首个匹配）
+    let mut lines: Vec<String> = body.lines().map(String::from).collect();
     let idx = (source_line - 1) as usize;
     if idx >= lines.len() {
         return Err(format!(
-            "source_line {} 越界（笔记共 {} 行）",
+            "source_line {} 越界（正文共 {} 行）",
             source_line,
             lines.len()
         ));
@@ -362,12 +397,13 @@ pub fn toggle_task_inner(
     } else {
         lines[idx].replace("[x]", "[ ]").replace("[X]", "[ ]")
     };
-    let mut new_raw = lines.join("\n");
-    if raw.ends_with('\n') {
-        new_raw.push('\n');
+    let mut new_body = lines.join("\n");
+    if body.ends_with('\n') {
+        new_body.push('\n');
     }
-    // 3. 复用 save（.helmose/backup 备份 + 写 vault + 增量索引 → tasks 表重建，done 态同步）
-    save_note_content_inner(note_id, &new_raw, db)
+    // 拼回 frontmatter + 复用 save（备份 + 写盘 + 增量索引 → tasks.done 同步）
+    let new_full = reassemble(&full, &new_body);
+    save_note_content_inner(note_id, &new_full, db)
 }
 
 /// 切换任务完成态（写回 vault + 索引）。任务列表勾选触发。
@@ -459,7 +495,7 @@ pub fn create_note_inner(
     // 5. 增量索引（notes + FTS + tasks + links + events/projects 同步）
     incremental::upsert_rel(db, vault_id, rel_path, content, Some(&abs))
         .map_err(|e| e.to_string())?;
-    // 6. 查回 note_id（upsert 后 notes 表有行）+ 返回 NoteContent
+    // 6. 查回 note_id（upsert 后 notes 表有行）→ fetch 完整 NoteContent（含 note_type/tags/frontmatter）
     let note_id: String = db
         .sqlite()
         .query_row(
@@ -469,14 +505,7 @@ pub fn create_note_inner(
         )
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("索引后未找到新笔记：{}", rel_path))?;
-    let html = render_markdown(content);
-    Ok(NoteContent {
-        id: note_id,
-        rel_path: rel_path.to_string(),
-        title: None,
-        raw_content: content.to_string(),
-        html,
-    })
+    fetch_note_content(&note_id, db)
 }
 
 /// 创建新笔记（写 vault 原文 + 增量索引）。onboarding/今日笔记按钮触发。
@@ -506,20 +535,14 @@ pub fn create_today_note_inner(vault_id: &str, db: &Database) -> Result<NoteCont
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
         )
         .map_err(|e| e.to_string())?;
-    if let Some((id, rp, raw)) = existing {
-        let html = render_markdown(&raw);
-        return Ok(NoteContent {
-            id,
-            rel_path: rp,
-            title: None,
-            raw_content: raw,
-            html,
-        });
+    if let Some((id, _rp, _raw)) = existing {
+        // 已存在 → fetch 完整 NoteContent（含 note_type/tags/frontmatter）
+        return fetch_note_content(&id, db);
     }
-    // 不存在 → 日志模板创建（create_note_inner 带路径安全 + 不覆盖 + 索引）
+    // 不存在 → 日志模板创建（含示例 bullet 引导格式；create_note_inner 带路径安全 + 不覆盖 + 索引）
     let tpl = format!(
-        "---\ntitle: {} 日志\ncreated: {}\n---\n\n# {}\n\n## 今日待办\n- \n\n## 关键事件\n- \n\n## 明日待办\n- \n",
-        today, today, today
+        "---\ntitle: {} 日志\ncreated: {}\n---\n\n# {}\n\n## 今日待办\n- [ ] 示例——今日要完成的事 📅 {}\n\n## 关键事件\n- 09:00 示例——与 XX 1:1\n\n## 明日待办\n- 示例——明天跟进 …\n",
+        today, today, today, today
     );
     create_note_inner(vault_id, &rel_path, &tpl, db)
 }
@@ -531,6 +554,421 @@ pub fn create_today_note(
     db: State<'_, Database>,
 ) -> Result<NoteContent, String> {
     create_today_note_inner(&vault_id, db.inner())
+}
+
+// ============================================================
+// 行级就地写入（inline-crud）—— append_bullet / update_line / delete_line
+// / patch_frontmatter / set_tag。全部经 save_note_content_inner 收口
+// （.helmose/backup 备份 + 写盘 + 增量索引），返回新 NoteContent。
+// 设计：命令壳解 State + inner(db) 核心可被集成测试直接调（与 toggle_task 同构）。
+// ============================================================
+
+/// 查 note 的 (rel_path, vault_root) —— 行级写入读盘共用。
+fn note_rel_and_root(note_id: &str, db: &Database) -> Result<(String, PathBuf), String> {
+    let row = db
+        .sqlite()
+        .query_row(
+            "SELECT n.rel_path, v.root_path FROM notes n \
+             JOIN vaults v ON v.id = n.vault_id WHERE n.id = ?1",
+            params![note_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("note {} not found", note_id))?;
+    Ok((row.0, PathBuf::from(row.1)))
+}
+
+/// 读盘完整文件内容（含 frontmatter）。行级写入一律在「盘完整文件」上操作，
+/// 避免基于 DB raw_content（去 frontmatter 的正文）写回时丢失 frontmatter。
+fn read_full(note_id: &str, db: &Database) -> Result<String, String> {
+    let (rel, root) = note_rel_and_root(note_id, db)?;
+    std::fs::read_to_string(root.join(&rel)).map_err(|e| format!("读取文件失败：{}", e))
+}
+
+/// full 里正文起始字节偏移（去 frontmatter 块）。无 frontmatter → 0。
+fn body_start_byte(full: &str) -> usize {
+    let b = full.as_bytes();
+    if !(b.len() >= 3 && &b[..3] == b"---") {
+        return 0;
+    }
+    let mut p = 3usize;
+    // 跳过首行 --- 后的换行
+    if p < b.len() && b[p] == b'\r' {
+        p += 1;
+    }
+    if p < b.len() && b[p] == b'\n' {
+        p += 1;
+    }
+    // 逐行找闭合 ---
+    while p < full.len() {
+        let nl = match full[p..].find('\n') {
+            Some(i) => i,
+            None => return full.len(),
+        };
+        let line = &full[p..p + nl];
+        if line.trim_end_matches('\r') == "---" {
+            return (p + nl + 1).min(full.len());
+        }
+        p += nl + 1;
+    }
+    full.len()
+}
+
+/// 取正文（去 frontmatter），与 indexer frontmatter::parse 同源，source_line 行号一致。
+fn body_of(full: &str) -> String {
+    crate::services::indexer::frontmatter::parse(full).content
+}
+
+/// 把改后的正文拼回原 frontmatter → 完整新文件（保留 fm，不丢字段）。
+fn reassemble(full: &str, new_body: &str) -> String {
+    let body_start = body_start_byte(full);
+    let prefix = &full[..body_start];
+    format!("{}{}", prefix, new_body)
+}
+
+/// 通用行级改写：按 1-based source_line 把原文对应行替换为 new_text → 复用 save。
+/// task/event 文本编辑共用；new_text 为完整新行（含 bullet 前缀，前端按场景拼）。
+pub fn update_line_inner(
+    note_id: &str,
+    source_line: i64,
+    new_text: &str,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    let full = read_full(note_id, db)?;
+    let body = body_of(&full);
+    let mut lines: Vec<String> = body.lines().map(String::from).collect();
+    let idx = (source_line - 1) as usize;
+    if idx >= lines.len() {
+        return Err(format!(
+            "source_line {} 越界（正文共 {} 行）",
+            source_line,
+            lines.len()
+        ));
+    }
+    lines[idx] = new_text.to_string();
+    let mut new_body = lines.join("\n");
+    if body.ends_with('\n') {
+        new_body.push('\n');
+    }
+    let new_full = reassemble(&full, &new_body);
+    save_note_content_inner(note_id, &new_full, db)
+}
+
+/// 行级改写命令壳（task/event 文本编辑触发）。
+#[tauri::command]
+pub fn update_line(
+    note_id: String,
+    source_line: i64,
+    new_text: String,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    update_line_inner(&note_id, source_line, &new_text, db.inner())
+}
+
+/// 通用行级删除：按 1-based source_line 删除原文对应行 → 复用 save（删前已备份）。
+/// task/event 单条删除共用。
+pub fn delete_line_inner(
+    note_id: &str,
+    source_line: i64,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    let full = read_full(note_id, db)?;
+    let body = body_of(&full);
+    let mut lines: Vec<String> = body.lines().map(String::from).collect();
+    let idx = (source_line - 1) as usize;
+    if idx >= lines.len() {
+        return Err(format!(
+            "source_line {} 越界（正文共 {} 行）",
+            source_line,
+            lines.len()
+        ));
+    }
+    lines.remove(idx);
+    let mut new_body = lines.join("\n");
+    if body.ends_with('\n') {
+        new_body.push('\n');
+    }
+    let new_full = reassemble(&full, &new_body);
+    save_note_content_inner(note_id, &new_full, db)
+}
+
+/// 行级删除命令壳（task/event 单条删除触发）。
+#[tauri::command]
+pub fn delete_line(
+    note_id: String,
+    source_line: i64,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    delete_line_inner(&note_id, source_line, db.inner())
+}
+
+/// 取标题行 `^#{1,6}` 的层级（1-6）；非标题或空标题 → None。
+fn heading_level_of(line: &str) -> Option<usize> {
+    let t = line.trim_start();
+    let n = t.chars().take_while(|&c| c == '#').count();
+    if !(1..=6).contains(&n) {
+        return None;
+    }
+    if t[n..].trim().is_empty() {
+        return None;
+    }
+    Some(n)
+}
+
+/// 判定该行是否为「名为 section」的标题（去 # 后 trim == section）。
+fn is_heading_named(line: &str, section: &str) -> bool {
+    let t = line.trim_start();
+    let n = t.chars().take_while(|&c| c == '#').count();
+    if !(1..=6).contains(&n) {
+        return false;
+    }
+    t[n..].trim() == section
+}
+
+/// 定位 section 末尾的插入行索引（0-based lines Vec）。
+/// 找标题行 H，向下到下一个同级/更浅标题或文末，插入点 = 该范围内最后一条非空行 + 1
+/// （范围全空则紧贴标题后）。section 未找到 → None。
+fn section_insert_index(lines: &[String], section: &str) -> Option<usize> {
+    let heading_idx = lines
+        .iter()
+        .position(|l| is_heading_named(l, section))?;
+    let heading_level = heading_level_of(&lines[heading_idx])?;
+    let mut end = lines.len();
+    for i in (heading_idx + 1)..lines.len() {
+        if let Some(lvl) = heading_level_of(&lines[i]) {
+            if lvl <= heading_level {
+                end = i;
+                break;
+            }
+        }
+    }
+    let mut last_non_empty = heading_idx;
+    for i in (heading_idx + 1)..end {
+        if !lines[i].trim().is_empty() {
+            last_non_empty = i;
+        }
+    }
+    Some(last_non_empty + 1)
+}
+
+/// 向指定 section 末尾追加 bullet → 复用 save。
+/// as_task=true → `- [ ] {text}`（任务）；false → `- {text}`（事件）。
+/// section 未找到 → Err（不静默追加到文末）。
+pub fn append_bullet_inner(
+    note_id: &str,
+    section: &str,
+    text: &str,
+    as_task: bool,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    let full = read_full(note_id, db)?;
+    let body = body_of(&full);
+    let mut lines: Vec<String> = body.lines().map(String::from).collect();
+    let insert_at = section_insert_index(&lines, section)
+        .ok_or_else(|| format!("未找到 section: {}", section))?;
+    let bullet = if as_task {
+        format!("- [ ] {}", text)
+    } else {
+        format!("- {}", text)
+    };
+    lines.insert(insert_at, bullet);
+    let mut new_body = lines.join("\n");
+    if body.ends_with('\n') {
+        new_body.push('\n');
+    }
+    let new_full = reassemble(&full, &new_body);
+    save_note_content_inner(note_id, &new_full, db)
+}
+
+/// 追加 bullet 命令壳（task/event 就地新建触发）。
+#[tauri::command]
+pub fn append_bullet(
+    note_id: String,
+    section: String,
+    text: String,
+    as_task: bool,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    append_bullet_inner(&note_id, &section, &text, as_task, db.inner())
+}
+
+/// 序列化 YAML 标量（手写，覆盖 helmose 用到的类型：string/number/bool）。
+/// string 含特殊字符（冒号/引号/#/首尾空格/YAML 指示符首字符）→ 加双引号转义；其余原样。
+fn serialize_yaml_scalar(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => {
+            let needs_quote = s.is_empty()
+                || s.contains(':')
+                || s.contains('#')
+                || s.contains('"')
+                || s.contains('\n')
+                || s.starts_with(' ')
+                || s.ends_with(' ')
+                || matches!(
+                    s.chars().next(),
+                    Some('-') | Some('[') | Some('{') | Some('\'') | Some('&')
+                        | Some('*') | Some('|') | Some('>') | Some('%') | Some('@') | Some('`')
+                );
+            if needs_quote {
+                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                format!("\"{}\"", escaped)
+            } else {
+                s.clone()
+            }
+        }
+        _ => value.to_string(),
+    }
+}
+
+/// 定位 frontmatter 块边界（0-based）。
+/// 返回 (start, end)：start = 首个 `---` 行，end = 第二个 `---` 行。要求首行是 `---`，否则 None。
+fn frontmatter_bounds(lines: &[String]) -> Option<(usize, usize)> {
+    if lines.is_empty() || lines[0].trim() != "---" {
+        return None;
+    }
+    let end = (1..lines.len()).find(|&i| lines[i].trim() == "---")?;
+    Some((0, end))
+}
+
+/// 改写 frontmatter 指定键（保留其余原文）。value 支持 string/number/bool。
+/// 键存在 → 替换值；不存在 → 在 frontmatter 块末尾（第二个 --- 前）插入。
+/// 无 frontmatter → Err（项目笔记应有，由 scaffold 保证）。
+pub fn patch_frontmatter_inner(
+    note_id: &str,
+    key: &str,
+    value: serde_json::Value,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    let full = read_full(note_id, db)?;
+    let mut lines: Vec<String> = full.lines().map(String::from).collect();
+    let (fm_start, fm_end) = frontmatter_bounds(&lines)
+        .ok_or_else(|| "笔记无 frontmatter，无法 patch".to_string())?;
+    let serialized = serialize_yaml_scalar(&value);
+    let key_pat = format!("{}:", key);
+    let mut found = false;
+    for i in (fm_start + 1)..fm_end {
+        let t = lines[i].trim_start();
+        if t.starts_with(&key_pat) {
+            let after = &t[key.len() + 1..];
+            // 精确 key（key 后是空格或行尾），避免误匹配 keyXxx
+            if after.is_empty() || after.starts_with(' ') {
+                lines[i] = format!("{}: {}", key, serialized);
+                found = true;
+                break;
+            }
+        }
+    }
+    if !found {
+        lines.insert(fm_end, format!("{}: {}", key, serialized));
+    }
+    let mut new_full = lines.join("\n");
+    if full.ends_with('\n') {
+        new_full.push('\n');
+    }
+    save_note_content_inner(note_id, &new_full, db)
+}
+
+/// frontmatter 字段改写命令壳（项目 priority 等触发）。
+#[tauri::command]
+pub fn patch_frontmatter(
+    note_id: String,
+    key: String,
+    value: serde_json::Value,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    patch_frontmatter_inner(&note_id, &key, value, db.inner())
+}
+
+/// 操作 frontmatter tags 数组（inline 格式 `tags: [a, b, c]`）。
+/// - value=Some(v)：确保存在该 tag。v == tag_prefix → 无值 tag（mainline）；否则 `{tag_prefix}:{v}`。
+///   同前缀旧值（`{tag_prefix}:*`）+ 精确 `{tag_prefix}` 先移除再插入，保证唯一。
+/// - value=None：移除该前缀所有 tag。
+/// block-array 格式（`tags:\n  - a`）→ Err 提示手动编辑，不破坏原文。
+pub fn set_tag_inner(
+    note_id: &str,
+    tag_prefix: &str,
+    value: Option<&str>,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    let full = read_full(note_id, db)?;
+    let mut lines: Vec<String> = full.lines().map(String::from).collect();
+    let (fm_start, fm_end) = frontmatter_bounds(&lines)
+        .ok_or_else(|| "笔记无 frontmatter，无法 set_tag".to_string())?;
+
+    let new_tag = value.map(|v| {
+        if v == tag_prefix {
+            tag_prefix.to_string() // 无值 tag（mainline）
+        } else {
+            format!("{}:{}", tag_prefix, v)
+        }
+    });
+
+    let tags_idx = (fm_start + 1..fm_end).find(|&i| {
+        let t = lines[i].trim_start();
+        t == "tags:" || t.starts_with("tags:")
+    });
+
+    match tags_idx {
+        Some(idx) => {
+            let after = lines[idx]
+                .trim_start()
+                .strip_prefix("tags:")
+                .unwrap_or("")
+                .trim();
+            // block-array 检测：tags: 后空 + 下一行 `  - xxx`
+            if after.is_empty() && idx + 1 < fm_end {
+                let next = lines[idx + 1].trim_start();
+                if next.starts_with("- ") {
+                    return Err(
+                        "frontmatter tags 为 block-array 格式，请手动编辑（本期仅支持 inline）"
+                            .to_string(),
+                    );
+                }
+            }
+            let arr = after.trim_start_matches('[').trim_end_matches(']');
+            let mut tags: Vec<String> = arr
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let prefix_colon = format!("{}:", tag_prefix);
+            tags.retain(|t| t != tag_prefix && !t.starts_with(&prefix_colon));
+            if let Some(nt) = new_tag {
+                tags.push(nt);
+            }
+            let content = if tags.is_empty() {
+                "[]".to_string()
+            } else {
+                tags.join(", ")
+            };
+            lines[idx] = format!("tags: [{}]", content);
+        }
+        None => {
+            if let Some(nt) = new_tag {
+                lines.insert(fm_end, format!("tags: [{}]", nt));
+            }
+            // value=None 且无 tags 行 → 无操作（幂等）
+        }
+    }
+
+    let mut new_full = lines.join("\n");
+    if full.ends_with('\n') {
+        new_full.push('\n');
+    }
+    save_note_content_inner(note_id, &new_full, db)
+}
+
+/// tags 改写命令壳（项目 status / mainline 触发）。
+#[tauri::command]
+pub fn set_tag(
+    note_id: String,
+    tag_prefix: String,
+    value: Option<String>,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    set_tag_inner(&note_id, &tag_prefix, value.as_deref(), db.inner())
 }
 
 /// 列出 vault 的 .helmose/backup/ 下所有备份（save 时自动生成的历史副本），按时间倒序。
@@ -1273,6 +1711,204 @@ mod tests {
             .unwrap_or(1);
         assert_eq!(done2, 0, "取消后 done 应回 0");
 
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    /// 行级写入测试辅助：建临时 vault + 单篇笔记 n.md，返回 (vault_dir, db, note_id)。
+    fn setup_line_vault(content: &str) -> (std::path::PathBuf, Database, String) {
+        use crate::commands::index::index_vault_inner;
+        let vid = uuid::Uuid::new_v4().to_string();
+        let vault_dir = std::env::temp_dir().join(format!(
+            "helmose_line_vault_{}_{}",
+            std::process::id(),
+            vid
+        ));
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let db_path = std::env::temp_dir().join(format!("helmose_line_db_{}.db", vid));
+        let db = Database::new(db_path).unwrap();
+        db.init_schema().unwrap();
+        db.sqlite()
+            .execute(
+                "INSERT INTO vaults (id,name,root_path,created_at,indexing_state,is_obsidian_shared,exclude_patterns) \
+                 VALUES (?1,'t',?2,'2026-01-01T00:00:00Z','idle',0,'[]')",
+                params![vid, vault_dir.to_string_lossy()],
+            )
+            .unwrap();
+        std::fs::write(vault_dir.join("n.md"), content).unwrap();
+        index_vault_inner(&vid, &db).unwrap();
+        let note_id = cur_note_id(&db);
+        (vault_dir, db, note_id)
+    }
+
+    /// 按 file_name=n.md 查当前 note_id（写入后 content_hash 变，id 会变，每次重查）。
+    fn cur_note_id(db: &Database) -> String {
+        db.sqlite()
+            .query_row(
+                "SELECT id FROM notes WHERE file_name='n.md'",
+                &[],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn update_line_改指定行() {
+        let (vault_dir, db, note_id) = setup_line_vault("# T\n\n## 今日待办\n- [ ] 旧任务\n");
+        // "- [ ] 旧任务" 在第 4 行
+        let nc = update_line_inner(&note_id, 4, "- [ ] 新任务", &db).expect("应改成功");
+        assert!(nc.raw_content.contains("- [ ] 新任务"), "raw 应含新文本");
+        assert!(!nc.raw_content.contains("旧任务"), "raw 不应再含旧文本");
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("- [ ] 新任务"), "vault 原文应已更新");
+        // 越界
+        let err = update_line_inner(&cur_note_id(&db), 999, "x", &db);
+        assert!(err.is_err(), "越界应 Err");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn delete_line_删指定行() {
+        let (vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务A\n- [ ] 任务B\n");
+        let nc = delete_line_inner(&note_id, 4, &db).expect("应删成功");
+        assert!(nc.raw_content.contains("任务B"), "任务B 应保留");
+        assert!(!nc.raw_content.contains("任务A"), "任务A 应已删除");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn append_bullet_追加到_section_末尾() {
+        let (vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 旧\n\n## 关键事件\n- 旧事件\n");
+        // 追加 task 到「今日待办」（应插在 `- [ ] 旧` 后、`## 关键事件` 前）
+        let nc = append_bullet_inner(&note_id, "今日待办", "新任务", true, &db).unwrap();
+        assert!(nc.raw_content.contains("- [ ] 新任务"), "应含新 task bullet");
+        let todo_pos = nc.raw_content.find("- [ ] 新任务").unwrap();
+        let evt_pos = nc.raw_content.find("## 关键事件").unwrap();
+        assert!(todo_pos < evt_pos, "新 task 应落在今日待办段内、关键事件之前");
+
+        // 追加 event 到「关键事件」（无 checkbox）
+        let nc2 = append_bullet_inner(&cur_note_id(&db), "关键事件", "新事件", false, &db).unwrap();
+        assert!(nc2.raw_content.contains("- 新事件"), "应含新 event bullet（无 checkbox）");
+
+        // section 不存在 → Err
+        let err = append_bullet_inner(&cur_note_id(&db), "不存在的section", "x", true, &db);
+        assert!(err.is_err(), "section 不存在应 Err");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn patch_frontmatter_改字段与插入新键() {
+        let (vault_dir, db, note_id) =
+            setup_line_vault("---\ntitle: P\ntype: project\npriority: 100\n---\n# P\n");
+        // 改已存在 priority（save 链路返回的 raw_content 是去 fm 正文，故读盘验 fm 字段）
+        patch_frontmatter_inner(&note_id, "priority", serde_json::json!(200), &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("priority: 200"), "应改 priority 为 200");
+        assert!(on_disk.contains("title: P"), "其余键应保留");
+
+        // 插入不存在的新键
+        patch_frontmatter_inner(&cur_note_id(&db), "okr", serde_json::json!("Q2"), &db).unwrap();
+        let on_disk2 = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk2.contains("okr: Q2"), "应插入新键 okr");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn patch_frontmatter_无frontmatter报错() {
+        let (vault_dir, db, note_id) = setup_line_vault("# 无 fm\n");
+        let err = patch_frontmatter_inner(&note_id, "priority", serde_json::json!(1), &db);
+        assert!(err.is_err(), "无 frontmatter 应 Err");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_tag_替换status_与切换mainline() {
+        let (vault_dir, db, note_id) = setup_line_vault(
+            "---\ntitle: P\ntype: project\ntags: [project-status:active, web]\n---\n# P\n",
+        );
+        // 替换 project-status:active → paused（保留 web）；raw_content 去 fm，读盘验 tags
+        set_tag_inner(&note_id, "project-status", Some("paused"), &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("project-status:paused"), "应替换为 paused");
+        assert!(on_disk.contains("web"), "无关 tag web 应保留");
+        assert!(!on_disk.contains("project-status:active"), "旧 status 应移除");
+
+        // 加 mainline（无值 tag：tag_prefix == value）
+        set_tag_inner(&cur_note_id(&db), "mainline", Some("mainline"), &db).unwrap();
+        let on_disk2 = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk2.contains("mainline"), "应加 mainline tag");
+
+        // 删 mainline（None）—— 精确移除 mainline，不影响 project-status:paused
+        set_tag_inner(&cur_note_id(&db), "mainline", None, &db).unwrap();
+        let on_disk3 = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk3.contains("project-status:paused"), "status 应保留");
+        // mainline 作为独立 tag 应被移除（retain 删精确 mainline）
+        let tags_line = on_disk3
+            .lines()
+            .find(|l| l.trim_start().starts_with("tags:"))
+            .unwrap_or("");
+        assert!(
+            !tags_line.split(|c: char| c == ',' || c == '[' || c == ']')
+                .any(|s| s.trim() == "mainline"),
+            "mainline 应已移除：{}",
+            tags_line
+        );
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_tag_无tags行_新建() {
+        let (vault_dir, db, note_id) =
+            setup_line_vault("---\ntitle: P\ntype: project\n---\n# P\n");
+        set_tag_inner(&note_id, "project-status", Some("active"), &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(
+            on_disk.contains("tags: [project-status:active]"),
+            "无 tags 行应新建：{}",
+            on_disk
+        );
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_tag_block_array_报错不破坏原文() {
+        let (vault_dir, db, note_id) = setup_line_vault(
+            "---\ntitle: P\ntype: project\ntags:\n  - project-status:active\n---\n# P\n",
+        );
+        let err = set_tag_inner(&note_id, "project-status", Some("paused"), &db);
+        assert!(err.is_err(), "block-array 应 Err 提示手动编辑");
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(
+            on_disk.contains("project-status:active"),
+            "block-array 报错不应破坏原文"
+        );
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    /// save_note_body 核心契约：只更正文，保留全部 frontmatter（不丢 type/tags/priority/created）。
+    /// 动机：getNoteContent 返回的 raw 是去 fm 正文，WYSIWYG 只编辑正文；
+    /// 若直接 save_note_content(正文) 会丢 fm，故 save_note_body 读盘拼回 fm。本测试锁定该行为。
+    #[test]
+    fn save_note_body_保留frontmatter() {
+        let (vault_dir, db, note_id) = setup_line_vault(
+            "---\ntitle: T\ntype: project\ntags: [project-status:active]\npriority: 50\n---\n# T\n\n旧正文\n",
+        );
+        let nc = save_note_body_inner(&note_id, "# T\n\n新正文内容\n", &db).unwrap();
+        // 盘上 fm 全保留 + 正文已更新
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("title: T"), "应保留 title");
+        assert!(on_disk.contains("type: project"), "应保留 type");
+        assert!(on_disk.contains("project-status:active"), "应保留 tags");
+        assert!(on_disk.contains("priority: 50"), "应保留 priority");
+        assert!(on_disk.contains("新正文内容"), "正文应更新");
+        assert!(!on_disk.contains("旧正文"), "旧正文应被替换");
+        // 返回 NoteContent.raw_content 是去 fm 正文（与 get_note_content 同源）
+        assert!(nc.raw_content.contains("新正文内容"), "返回 raw 应为新正文");
+        assert!(!nc.raw_content.contains("title:"), "返回 raw 不应含 fm");
+        // frontmatter 字段在返回值里也能取到（字段表单用）
+        assert_eq!(nc.note_type.as_deref(), Some("project"), "返回 note_type 应为 project");
         let _ = std::fs::remove_dir_all(&vault_dir);
     }
 }

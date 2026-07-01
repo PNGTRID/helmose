@@ -235,8 +235,8 @@ pub fn upsert_rel(
             for ev in &p.events {
                 tx.execute(
                     "INSERT INTO events \
-                     (id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                     (id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet,source_line) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                     params![
                         uuid::Uuid::new_v4().to_string(),
                         id,
@@ -248,6 +248,7 @@ pub fn upsert_rel(
                         ev.output,
                         None::<String>,
                         ev.raw_bullet,
+                        ev.source_line,
                     ],
                 )?;
             }

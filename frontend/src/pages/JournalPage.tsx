@@ -1,11 +1,13 @@
-// 日志页：列出 note_type 为 experience / log 的笔记，按月分组（Collapse 折叠，默认展开最新月）。
-// 点击 openNoteFromMeta → NoteView 打开。destroyInactivePanel 只渲染展开月，省 DOM。
-import { useMemo } from "react";
-import { Collapse, List, Tag, Typography } from "antd";
+// 日志页：列出 note_type 为 experience / log 的笔记，按月分组（Collapse，默认展开最新月）。
+// 点击笔记 → NoteEditorDrawer（抽屉编辑，不跳 tab）。新建今日日志按钮 → createTodayNote + 抽屉。
+import { useMemo, useState } from "react";
+import { Button, Collapse, List, message, Tag, Typography } from "antd";
+import { PlusOutlined } from "@ant-design/icons";
+import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
-import { openNoteFromMeta } from "../utils/note";
 import DataState from "../components/DataState";
+import NoteEditorDrawer from "../components/NoteEditorDrawer";
 import type { NoteMeta } from "../types";
 
 const { Text } = Typography;
@@ -22,6 +24,7 @@ const TYPE_COLOR: Record<string, string> = {
 export default function JournalPage() {
   const vault = useVaultStore((s) => s.vault);
   const { notes, loading, error } = useAllNotesMeta();
+  const [drawerNoteId, setDrawerNoteId] = useState<string | null>(null);
 
   // 过滤 experience / log，按 date_iso 倒序
   const journal = useMemo(() => {
@@ -52,6 +55,17 @@ export default function JournalPage() {
   const logCount = journal.filter((n) => n.note_type === "log").length;
   const expCount = journal.length - logCount;
 
+  // 新建今日日志（createTodayNote 已存在则返回）→ 开抽屉
+  const newJournal = async () => {
+    if (!vault) return;
+    try {
+      const nc = await api.createTodayNote(vault.id);
+      setDrawerNoteId(nc.id);
+    } catch (e) {
+      message.error(`新建失败：${e}`);
+    }
+  };
+
   const collapseItems = groups.map((g) => ({
     key: g.month,
     label: (
@@ -69,7 +83,7 @@ export default function JournalPage() {
           return (
             <List.Item
               style={{ cursor: "pointer", padding: "6px 0" }}
-              onClick={() => openNoteFromMeta(n)}
+              onClick={() => setDrawerNoteId(n.id)}
             >
               <List.Item.Meta
                 title={<Text ellipsis>{n.title ?? n.file_name}</Text>}
@@ -83,9 +97,7 @@ export default function JournalPage() {
                         {n.date_iso}
                       </Text>
                     )}
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {n.rel_path}
-                    </Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{n.rel_path}</Text>
                   </span>
                 }
               />
@@ -98,13 +110,20 @@ export default function JournalPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <Text strong style={{ fontSize: 16 }}>
-          日志
-        </Text>
-        <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
+      <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+        <Text strong style={{ fontSize: 16 }}>日志</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>
           {journal.length} 篇 · 日志 {logCount} / 经历 {expCount} · 按月分组 · 点击打开
         </Text>
+        <Button
+          size="small"
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={newJournal}
+          style={{ marginLeft: "auto" }}
+        >
+          新建今日日志
+        </Button>
       </div>
 
       <DataState
@@ -120,6 +139,12 @@ export default function JournalPage() {
           destroyInactivePanel
         />
       </DataState>
+
+      <NoteEditorDrawer
+        open={!!drawerNoteId}
+        noteId={drawerNoteId}
+        onClose={() => setDrawerNoteId(null)}
+      />
     </div>
   );
 }

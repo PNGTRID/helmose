@@ -33,12 +33,50 @@ fn is_empty_dir(path: &Path) -> bool {
         .unwrap_or(true)
 }
 
-/// 单种 type 的待填写模板（frontmatter 占位 + 引导文字，通用无私有业务内容）
+/// 12 种 type 的填写引导：`(type, 一句话说明, 正文结构引导)`。
+/// 通用骨架，不含作者私有业务内容（Req 2.4）。与 `contract::NOTE_TYPES` 对齐，
+/// 测试断言每种 type 都有引导（防漂移）。说明用于规范.md 表，引导用于 type 模板正文。
+const TYPE_GUIDES: &[(&str, &str, &str)] = &[
+    ("profile", "个人画像——我是谁", "- **定位**：一句话说清你是谁、在做什么。\n- **价值观 / 原则**：指导你决策的核心信念。\n- **能力清单**：擅长什么、在持续精进什么。\n- **当前目标**：近期聚焦的主线（用 `[[wikilink]]` 关联 project/strategy）。\n- **关键数据**：可被 Agent 读取的结构化字段（专业领域、所在城市等）。"),
+    ("person", "人物档案——关系人", "- **基础信息**：姓名、身份、与你的关系。\n- **背景**：经历、专长、兴趣。\n- **价值交换**：你能提供什么、对方能提供什么。\n- **互动记录**：上次见面 / 沟通要点、待跟进项（用 `[[wikilink]]` 关联事件）。\n- **标签**：人脉分类（如 mentor / 合作方 / 客户）。"),
+    ("project", "项目——有目标有节点的推进单元", "- **目标**：这个项目要达成什么（尽量可量化）。\n- **状态**：进行中 / 已完成 / 暂停。\n- **里程碑**：关键节点 + 时间。\n- **关联主线**：服务于哪条主线 / OKR（链接）。\n- **关键事件**：用 `- ` 列表记录推进要事（会被 events 索引提取）。\n- **任务**：待办用 `- [ ]` + `📅 YYYY-MM-DD` 标截止。"),
+    ("strategy", "运营策略——方向与取舍", "- **策略方向**：要解决的核心问题 + 取舍逻辑。\n- **决策依据**：数据 / 观察 / 假设。\n- **执行路径**：分步骤的行动。\n- **生效范围**：适用于哪些项目 / 场景。\n- **复盘锚点**：何时回看、用什么指标判断成败。"),
+    ("book", "书籍——读书笔记", "- **书名 / 作者**：基本信息。\n- **核心观点**：3-5 条最打动你的论点。\n- **摘录**：高价值原文片段（标注页码）。\n- **应用**：会怎么用到自己的项目 / 生活。\n- **评价**：推荐度 / 适读人群。"),
+    ("course", "课程——学习记录", "- **课程 / 讲师**：基本信息。\n- **模块大纲**：课程结构。\n- **核心收获**：每个模块的要点。\n- **作业 / 实操**：练习记录。\n- **应用**：如何转化为行动。"),
+    ("tool", "工具——使用与技巧", "- **用途**：解决什么问题。\n- **上手要点**：安装 / 配置 / 关键设置。\n- **使用技巧**：提效用法、快捷键、模板。\n- **对比**：与同类工具的差异（可链接 `[[comparison]]`）。\n- **坑 / 注意**：踩过的雷。"),
+    ("method", "方法论——可复用的做法", "- **定义**：这是什么方法、解决什么问题。\n- **适用场景**：何时用、何时不用。\n- **步骤**：操作流程（编号清单）。\n- **案例**：自己实践的真实例子。\n- **局限**：边界与反例。"),
+    ("experience", "经历——事件与反思", "- **时间 / 地点**：事件基本要素。\n- **事件经过**：发生了什么。\n- **感受 / 反思**：当时的情绪与现在的视角。\n- **教训**：可复用的经验。\n- **关联**：链接到相关人 / 项目 / 方法论。"),
+    ("comparison", "对比分析——决策依据", "- **对比对象**：列出比较的若干选项。\n- **对比维度**：用表格呈现（维度 × 选项）。\n- **结论**：各场景下的推荐选择。\n- **依据**：数据 / 实测 / 来源（写进 frontmatter `sources`）。\n- **决策**：你最终选了什么、为什么。"),
+    ("log", "日志——每日记录与复盘", "- **今日要事**：当天关键事件 / 决策（`- ` 列表，会被 events 提取）。\n- **进展**：推进了哪些项目 / 任务。\n- **复盘**：做得好的 / 要改进的。\n- **明日计划**：下一步聚焦。"),
+    ("query", "待解决问题——开放疑问", "- **问题**：要回答的核心疑问。\n- **背景**：为什么问这个。\n- **已知**：目前掌握的信息。\n- **待查**：还需要搞清楚的点。\n- **结论**：找到答案后填写（可链接到 method / comparison）。"),
+];
+
+/// type 的一句话说明（用于规范.md「页面类型说明」表；缺失兜底「（待补充）」）
+fn type_desc(t: &str) -> &'static str {
+    TYPE_GUIDES
+        .iter()
+        .find(|(k, _, _)| *k == t)
+        .map(|(_, d, _)| *d)
+        .unwrap_or("（待补充）")
+}
+
+/// type 的正文填写引导（用于 type 模板正文；缺失兜底通用提示）
+fn type_guide(t: &str) -> &'static str {
+    TYPE_GUIDES
+        .iter()
+        .find(|(k, _, _)| *k == t)
+        .map(|(_, _, g)| *g)
+        .unwrap_or("在此填写内容。")
+}
+
+/// 单种 type 的待填写模板（frontmatter 占位 + 该 type 专属填写引导，通用无私有业务内容）
 fn type_template(type_name: &str, dir: &str) -> String {
     format!(
-        "---\ntitle: 待填写\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\ntype: {t}\ntags: []\nsources: []\n---\n\n# {t}\n\n> 存放位置：`{dir}`\n> type 说明见根目录 `规范.md`「页面类型说明」。在此填写内容。\n",
+        "---\ntitle: 待填写\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\ntype: {t}\ntags: []\nsources: []\n---\n\n# {t}\n\n> 存放位置：`{dir}`\n> type 说明：{desc}\n\n## 内容引导\n\n{guide}\n",
         t = type_name,
-        dir = dir
+        dir = dir,
+        desc = type_desc(type_name),
+        guide = type_guide(type_name),
     )
 }
 
@@ -53,10 +91,10 @@ fn template_spec() -> String {
     s.push_str("```\n\n## 页面类型说明\n\n| type | 说明 | 存放目录 |\n|------|------|----------|\n");
     for t in contract::NOTE_TYPES {
         let dir = contract::type_to_dir(t).unwrap_or("");
-        s.push_str(&format!("| {} | （待补充） | {} |\n", t, dir));
+        s.push_str(&format!("| {} | {} | {} |\n", t, type_desc(t), dir));
     }
     s.push_str(
-        "\n## Frontmatter 模板\n\n```yaml\n---\ntitle: 页面标题\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\ntype: profile | person | project | strategy | book | course | tool | method | experience | comparison | query\ntags: []\nsources: []\n---\n```\n",
+        "\n## Frontmatter 模板\n\n```yaml\n---\ntitle: 页面标题\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\ntype: profile | person | project | strategy | book | course | tool | method | experience | comparison | query | log\ntags: []\nsources: []\n---\n```\n",
     );
     s
 }
@@ -98,7 +136,7 @@ fn scaffold_inner(target_path: &str) -> Result<ScaffoldStats, String> {
         dirs_created += 1;
     }
 
-    // 2. 11 种 type 待填写模板（放 type_to_dir 指定目录）
+    // 2. 12 种 type 待填写模板（放 type_to_dir 指定目录）
     for t in contract::NOTE_TYPES {
         if let Some(dir) = contract::type_to_dir(t) {
             let abs_dir = root.join(dir);
@@ -195,6 +233,43 @@ mod tests {
         let err = scaffold_inner(root.to_string_lossy().as_ref()).unwrap_err();
         assert!(err.contains("已有 vault"), "应识别已有 vault：{}", err);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 每种_type_都有填写引导() {
+        // TYPE_GUIDES 必须覆盖全部 contract::NOTE_TYPES（防脚手架引导与契约漂移）
+        assert_eq!(
+            TYPE_GUIDES.len(),
+            contract::NOTE_TYPES.len(),
+            "TYPE_GUIDES 数量应与 NOTE_TYPES 一致"
+        );
+        for t in contract::NOTE_TYPES {
+            assert!(
+                TYPE_GUIDES.iter().any(|(k, _, _)| k == t),
+                "type {} 缺填写引导",
+                t
+            );
+            assert_ne!(type_desc(t), "（待补充）", "type {} 的说明不应是兜底", t);
+            assert_ne!(type_guide(t), "在此填写内容。", "type {} 的引导不应是兜底", t);
+        }
+        // 反向：TYPE_GUIDES 里的 type 必须都在契约内（防引入非契约 type）
+        for (t, _, _) in TYPE_GUIDES {
+            assert!(contract::NOTE_TYPES.contains(t), "TYPE_GUIDES 含非契约 type {}", t);
+        }
+    }
+
+    #[test]
+    fn type_template_含_frontmatter_与专属引导() {
+        // project 模板应含 frontmatter type=project + 存放位置 + 内容引导标题 + project 专属引导关键词
+        let tmpl = type_template("project", "01_企业与项目资产/");
+        assert!(tmpl.contains("type: project"), "应有 frontmatter type: project：{}", tmpl);
+        assert!(tmpl.contains("存放位置"), "应含存放位置提示：{}", tmpl);
+        assert!(tmpl.contains("## 内容引导"), "应含引导标题：{}", tmpl);
+        assert!(tmpl.contains("里程碑"), "project 模板应含专属引导关键词：{}", tmpl);
+        // frontmatter 字段齐全
+        for field in ["title:", "created:", "updated:", "tags:", "sources:"] {
+            assert!(tmpl.contains(field), "frontmatter 缺字段 {}", field);
+        }
     }
 
     /// scaffold → add_vault → index_vault_inner 链路：脚手架生成的模板 md 被正确索引入库。

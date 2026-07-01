@@ -14,4 +14,6 @@ pub struct Event {
     pub output: Option<String>,
     pub project_id: Option<String>,
     pub raw_bullet: Option<String>,
+    /// bullet 在全文的行号（1-based），供行级 update/delete 定位（inline-crud）
+    pub source_line: Option<i32>,
 }

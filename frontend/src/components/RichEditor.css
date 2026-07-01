@@ -1,0 +1,96 @@
+/* ============================================================
+   RichEditor（Tiptap WYSIWYG）样式
+   - 编辑区挂双类 tiptap-content + md-preview，直接复用 index.css 全套排版
+     （标题/段落/列表/引用/代码/表格/wikilink/checkbox），此处只补 ProseMirror 专属
+   - 颜色全用 var(--ob-*) token，暗色模式自动跟随
+   ============================================================ */
+
+.rich-editor {
+  border: 1px solid var(--ob-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--ob-bg);
+}
+
+/* 编辑区主体：覆盖 md-preview 的 max-width（编辑器铺满容器），给可写高度 */
+.rich-editor .tiptap-content {
+  max-width: none;
+  min-height: 360px;
+  padding: 16px 20px;
+  outline: none;
+}
+
+/* ProseMirror 聚焦不加默认 outline（Obsidian 式干净） */
+.rich-editor .ProseMirror:focus {
+  outline: none;
+}
+
+/* Placeholder 占位文字（空编辑器时显示） */
+.rich-editor .tiptap-content.is-empty::before,
+.rich-editor .tiptap-content p.is-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--ob-text-faint);
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+/* —— 任务列表（- [ ]）：Tiptap 用 ul[data-type=taskList] + li[data-type=taskItem]
+   li 渲染为 <label><input type=checkbox><span></span></label><div>内容</div>，
+   默认 flex 布局；覆盖 md-preview ul 的 padding-left —— */
+.rich-editor .tiptap-content ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+.rich-editor .tiptap-content ul[data-type="taskList"][data-checked="false"] > li {
+  /* 未完成样式（可扩展删除线等） */
+}
+.rich-editor .tiptap-content ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.rich-editor .tiptap-content ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  user-select: none;
+  margin-top: 0.35em;
+}
+.rich-editor .tiptap-content ul[data-type="taskList"] li > div {
+  flex: 1;
+  min-width: 0;
+}
+.rich-editor .tiptap-content ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: var(--ob-text-faint);
+  text-decoration: line-through;
+}
+
+/* 代码块字号微调（md-preview pre 已给背景/边框） */
+.rich-editor .tiptap-content .tiptap-code-block,
+.rich-editor .tiptap-content pre code {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+/* 嵌套列表缩进（ProseMirror 默认 0，补 md-preview 观感） */
+.rich-editor .tiptap-content ul ul,
+.rich-editor .tiptap-content ol ol,
+.rich-editor .tiptap-content ul ol,
+.rich-editor .tiptap-content ol ul {
+  margin: 0.2em 0;
+}
+
+/* —— 表格：复用 .md-preview table/th/td 的边框与背景，补铺满 + 选中态 —— */
+.rich-editor .tiptap-content table {
+  width: 100%;
+}
+.rich-editor .tiptap-content th,
+.rich-editor .tiptap-content td {
+  min-width: 60px;
+  position: relative;
+}
+.rich-editor .tiptap-content .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--ob-accent-mod);
+  pointer-events: none;
+}
