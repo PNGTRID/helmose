@@ -8,26 +8,6 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
   clearScreen: false,
-  // CodeMirror 多实例去重：@uiw/react-codemirror 与 @codemirror/lang-markdown 各自依赖
-  // @codemirror/state 等底层包，Vite dev 预构建（esbuild）可能为不同入口各打一份，
-  // 运行时出现两份实例 → instanceof 检查失效 → "Unrecognized extension value in
-  // extension set ([object Object])"，编辑器 tab 渲染失败。
-  // dedupe 强制这些包的所有 import 解析到同一物理实例（CodeMirror 官方推荐解法）。
-  resolve: {
-    dedupe: [
-      "@codemirror/state",
-      "@codemirror/view",
-      "@codemirror/language",
-      "@codemirror/commands",
-      "@codemirror/autocomplete",
-      "@codemirror/lint",
-      "@codemirror/search",
-      "@codemirror/theme-one-dark",
-      "@lezer/common",
-      "@lezer/highlight",
-      "@lezer/lr",
-    ],
-  },
   server: {
     port: 14200,
     strictPort: true,

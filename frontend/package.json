@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
-    "@codemirror/lang-markdown": "^6.5.0",
     "@tauri-apps/api": "^2.9.1",
     "@tauri-apps/plugin-dialog": "^2.5.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
@@ -32,7 +31,6 @@
     "@tiptap/pm": "^3.27.1",
     "@tiptap/react": "^3.27.1",
     "@tiptap/starter-kit": "^3.27.1",
-    "@uiw/react-codemirror": "^4.25.10",
     "antd": "^6.1.4",
     "dayjs": "^1.11.19",
     "marked": "^18.0.5",

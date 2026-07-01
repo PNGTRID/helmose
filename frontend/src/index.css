@@ -4,7 +4,7 @@
    此处只保留必须全局的部分：
    - CSS 变量（所有组件 .css 引用）
    - marked 渲染的 markdown 预览（HTML 内部无组件类名，必须全局）
-   - antd/CodeMirror 覆盖、跨组件共享类（ob-file-item）
+   - antd 覆盖、跨组件共享类（ob-file-item）
    ============================================================ */
 * {
   box-sizing: border-box;
