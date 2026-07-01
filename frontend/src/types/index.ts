@@ -48,6 +48,12 @@ export interface Task {
   project_id: string | null;
   created_at: string;
   completed_at: string | null;
+  /** M3：状态（todo | doing | done）。done 是派生（status === 'done'）。 */
+  status: string;
+  /** M3：优先级 0-3（0=未设，⭐ 数 1-3）。 */
+  priority: number;
+  /** M3：紧急度（low | mid | high，🔥 = high）。派生（按 due_date 推导）只在前端。 */
+  urgency: string;
 }
 
 export interface IndexStats {
@@ -151,6 +157,22 @@ export interface Project {
   okr_priority: string | null;
   home_rel_path: string | null;
   last_activity: string | null;
+  /** M5：负责人（frontmatter.owner，无则 null） */
+  owner: string | null;
+}
+
+/** M5：项目进度聚合（运行时聚合，不入 frontmatter）。 */
+export interface ProjectProgress {
+  /** 项目 ID（projects.id） */
+  project_id: string;
+  /** 项目名（前端展示用） */
+  name: string;
+  /** 关联任务总数 */
+  total: number;
+  /** 已完成数（status === 'done'） */
+  done: number;
+  /** 逾期未完成数（due_date < 今天 且 status !== 'done'） */
+  due_overdue: number;
 }
 
 /** 事件（笔记「关键事件 / 时间线」section 的 bullet） */

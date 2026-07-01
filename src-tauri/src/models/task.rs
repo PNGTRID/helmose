@@ -15,4 +15,11 @@ pub struct Task {
     pub project_id: Option<String>,
     pub created_at: String,
     pub completed_at: Option<String>,
+    /// M3：任务状态（"todo" | "doing" | "done"）。done 字段保留为派生（status == 'done'）。
+    pub status: String,
+    /// M3：优先级 0-3，0=未设（来自 vault ⭐ 数 1-3）。
+    pub priority: i32,
+    /// M3：紧急度（"low" | "mid" | "high"，来自 vault 🔥 标记）。
+    /// 注：派生（按 due_date 推导）只在前端做，indexer 只解析手动 🔥。
+    pub urgency: String,
 }

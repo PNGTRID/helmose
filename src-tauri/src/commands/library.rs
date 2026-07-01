@@ -8,6 +8,7 @@
 
 use crate::models::{NoteContent, NoteMeta};
 use crate::services::Database;
+use crate::services::indexer::tasks;
 use crate::utils::exclude::{is_excluded, is_excluded_rel};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -303,14 +304,24 @@ pub fn save_note_content_inner(
     let root = PathBuf::from(&root_path);
     let abs = root.join(&rel_path);
 
-    // 2. 备份原文件（若存在）
+    // 2. 备份原文件（若存在）。备份失败不阻塞写（磁盘满/权限时返回 Err 反而让用户无法保存），
+    //    但要 eprintln 留痕，绝不静默吞错（review 要求：log 不静默）。
     if abs.exists() {
         let backup_dir = root.join(".helmose").join("backup");
-        let _ = std::fs::create_dir_all(&backup_dir);
+        if let Err(e) = std::fs::create_dir_all(&backup_dir) {
+            tracing::warn!("备份目录创建失败 {}: {}", backup_dir.display(), e);
+        }
         let safe_name = rel_path.replace('/', "_");
         let ts = crate::utils::dates::now_iso8601().replace(':', "-");
         let backup_path = backup_dir.join(format!("{}.{}.md", safe_name, ts));
-        let _ = std::fs::copy(&abs, &backup_path);
+        if let Err(e) = std::fs::copy(&abs, &backup_path) {
+            tracing::warn!(
+                "备份失败 {} -> {}: {}",
+                abs.display(),
+                backup_path.display(),
+                e
+            );
+        }
     }
 
     // 3. 确保父目录存在，写新内容到 vault 原文
@@ -415,6 +426,230 @@ pub fn toggle_task(
     db: State<'_, Database>,
 ) -> Result<NoteContent, String> {
     toggle_task_inner(&note_id, source_line, done, db.inner())
+}
+
+// ============================================================
+// M3：任务字段就地写入（status / priority / urgency）
+// 三 inner 复用 toggle_task_inner 的拆行骨架（lines + idx=source_line-1 + 越界检查 + join），
+// 改完后统一经 save_note_content_inner 收口（备份 + 写盘 + 重索引 → tasks 新值同步）。
+// bullet 文本约定（与 indexer split_* 同口径）：
+//   - status：checkbox 前缀 `[ ]`/`[/]`/`[x]` 决定（done 同步派生：done=done==[x]）；
+//              bullet 内 🔄 同义 doing（[ ] 任务 🔄 ↔ [/] 任务）。
+//   - priority：⭐ 数 0-3（0=清空）。
+//   - urgency：🔥 = high，移除 = low（派生只在前端）。
+// ============================================================
+
+/// task status 白名单（todo/doing/done）。命令壳入口 + 单元测试共用。
+/// 非法值 → Err，避免 inner 走 `_ =>` 分支静默按 todo 兜底。
+fn validate_task_status(s: &str) -> Result<(), String> {
+    if !["todo", "doing", "done"].contains(&s) {
+        return Err(format!("非法 status 值: {}（必须 todo/doing/done）", s));
+    }
+    Ok(())
+}
+
+/// task urgency 白名单（high/mid/low）。命令壳入口 + 单元测试共用。
+fn validate_task_urgency(s: &str) -> Result<(), String> {
+    if !["high", "mid", "low"].contains(&s) {
+        return Err(format!("非法 urgency 值: {}（必须 high/mid/low）", s));
+    }
+    Ok(())
+}
+
+/// task priority 范围（0-3）。命令壳入口 + 单元测试共用。
+fn validate_task_priority(p: i32) -> Result<(), String> {
+    if !(0..=3).contains(&p) {
+        return Err(format!("非法 priority 值: {}（必须 0-3）", p));
+    }
+    Ok(())
+}
+
+/// 行级编辑所需上下文（line_for_edit 返回，避免 4-tuple 顺序错读）。
+struct LineEdit {
+    /// 完整文件内容（含 frontmatter，拼回用）
+    full: String,
+    /// 命中行的原文
+    line: String,
+    /// 正文所有行（可变，改后 join 回写）
+    lines: Vec<String>,
+    /// 正文是否以换行结尾（join 后补 \n 用）
+    trailing_nl: bool,
+}
+
+/// 通用拆行：按 1-based source_line 取该行，越界/source_line<=0 → Err。
+/// source_line==null（聚合 section 任务）由上层拦截，本函数仅处理 >0 的就地行。
+fn line_for_edit(note_id: &str, source_line: i64, db: &Database) -> Result<LineEdit, String> {
+    let full = read_full(note_id, db)?;
+    let body = body_of(&full);
+    let lines: Vec<String> = body.lines().map(String::from).collect();
+    if source_line <= 0 {
+        return Err("该任务不支持改状态（聚合 section）".to_string());
+    }
+    let idx = (source_line - 1) as usize;
+    if idx >= lines.len() {
+        return Err(format!(
+            "source_line {} 越界（正文共 {} 行）",
+            source_line,
+            lines.len()
+        ));
+    }
+    let trailing_nl = body.ends_with('\n');
+    Ok(LineEdit {
+        full,
+        line: lines[idx].clone(),
+        lines,
+        trailing_nl,
+    })
+}
+
+/// 把改后的行集合拼回完整文件（保留 frontmatter），交由 save_note_content_inner 收口。
+fn save_lines(note_id: &str, full: &str, lines: Vec<String>, trailing_nl: bool, db: &Database) -> Result<NoteContent, String> {
+    let mut new_body = lines.join("\n");
+    if trailing_nl {
+        new_body.push('\n');
+    }
+    let new_full = reassemble(full, &new_body);
+    save_note_content_inner(note_id, &new_full, db)
+}
+
+/// 改任务状态（status：todo/doing/done）。
+/// bullet 前缀切换：done → `[x]`；doing → `[/]`（保留 🔄 同义）；todo → `[ ]`。
+/// 若原行无 checkbox 前缀（section bullet），doing 加 🔄 emoji，其他状态移除 🔄。
+/// status=done 同步 done 派生字段（save 后 tasks.done=1）。
+pub fn set_task_status_inner(
+    note_id: &str,
+    source_line: i64,
+    status: &str,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    let mut le = line_for_edit(note_id, source_line, db)?;
+    let idx = (source_line - 1) as usize;
+
+    // 拆出行首 bullet marker（`- [ ]` / `- [/]` / `- [x]` / `- ` 之一）+ body
+    // 用正则一次切出 marker 与 body 两部分；marker 是 `- [X]` 或裸 `- /*`
+    static RE_LINE_SPLIT: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(\s*[-*+]\s)(\[[ xX/]\]\s+)?(.*)$").unwrap());
+
+    let caps = RE_LINE_SPLIT
+        .captures(&le.line)
+        .ok_or_else(|| format!("行 {} 不是合法 bullet：{}", source_line, le.line))?;
+    let prefix = caps[1].to_string(); // `- ` / `* ` 等
+    let _checkbox_opt = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+    let body_text = caps[3].to_string();
+
+    // body_text 内剥离 🔄（状态切换前后，body 不带 🔄，状态由 checkbox 前缀承载）。
+    // 复用 indexer::tasks 的 pub 正则（emoji 清理单一源，避免两处漂移）。
+    let body_no_spin = tasks::RE_STATUS_DOING
+        .replace_all(&body_text, "")
+        .trim()
+        .to_string();
+
+    let new_line = match status {
+        "done" => format!("{}[x] {}", prefix, body_no_spin),
+        "doing" => format!("{}[/] {}", prefix, body_no_spin),
+        _ => format!("{}[ ] {}", prefix, body_no_spin),
+    };
+
+    le.lines[idx] = new_line;
+    save_lines(note_id, &le.full, le.lines, le.trailing_nl, db)
+}
+
+/// 改任务优先级（priority：0-3，0 = 清空 ⭐）。
+/// 在行尾按 priority 数补 ⭐（0=删全部 ⭐；1-3=补对应数）。先剥离旧 ⭐ 再补新数。
+pub fn set_task_priority_inner(
+    note_id: &str,
+    source_line: i64,
+    priority: i32,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    let mut le = line_for_edit(note_id, source_line, db)?;
+    let idx = (source_line - 1) as usize;
+
+    // 剥离旧 ⭐（复用 indexer::tasks 的 pub 正则，单一源；trim_end 保留 bullet 缩进）
+    let cleaned = tasks::RE_PRIORITY
+        .replace_all(&le.line, "")
+        .trim_end()
+        .to_string();
+
+    let n = priority.clamp(0, 3);
+    let new_line = if n > 0 {
+        let stars = "⭐".repeat(n as usize);
+        format!("{} {}", cleaned, stars)
+    } else {
+        cleaned
+    };
+
+    le.lines[idx] = new_line;
+    save_lines(note_id, &le.full, le.lines, le.trailing_nl, db)
+}
+
+/// 改任务紧急度（urgency：high=加 🔥，其他=删 🔥）。
+/// 派生（按 due_date 推导）只在前端，本命令只对手动 🔥 增删。
+pub fn set_task_urgency_inner(
+    note_id: &str,
+    source_line: i64,
+    urgency: &str,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    let mut le = line_for_edit(note_id, source_line, db)?;
+    let idx = (source_line - 1) as usize;
+
+    // 先剥 🔥（复用 indexer::tasks 的 pub 正则，单一源），再按 high 决定补不补
+    let cleaned = tasks::RE_URGENCY_HIGH
+        .replace_all(&le.line, "")
+        .trim_end()
+        .to_string();
+
+    let new_line = if urgency == "high" {
+        format!("{} 🔥", cleaned)
+    } else {
+        cleaned
+    };
+
+    le.lines[idx] = new_line;
+    save_lines(note_id, &le.full, le.lines, le.trailing_nl, db)
+}
+
+/// 改任务状态（命令壳）。任务列表 status 切换 / 看板跨列拖拽触发。
+#[tauri::command]
+pub fn set_task_status(
+    note_id: String,
+    source_line: i64,
+    status: String,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    // 入口显式白名单校验：拒绝非法 status（防 inner 兜底静默成功）
+    validate_task_status(&status)?;
+    tracing::info!(note_id = %note_id, source_line, status = %status, "set_task_status 写回");
+    set_task_status_inner(&note_id, source_line, &status, db.inner())
+}
+
+/// 改任务优先级（命令壳）。四象限拖拽 / 行内 ⭐ 切换触发。
+#[tauri::command]
+pub fn set_task_priority(
+    note_id: String,
+    source_line: i64,
+    priority: i32,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    // 入口显式范围校验：拒绝非法 priority（防 inner clamp 静默兜底成功）
+    validate_task_priority(priority)?;
+    tracing::info!(note_id = %note_id, source_line, priority, "set_task_priority 写回");
+    set_task_priority_inner(&note_id, source_line, priority, db.inner())
+}
+
+/// 改任务紧急度（命令壳）。四象限拖拽 / 行内 🔥 切换触发。
+#[tauri::command]
+pub fn set_task_urgency(
+    note_id: String,
+    source_line: i64,
+    urgency: String,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    // 入口显式白名单校验：拒绝非法 urgency（防 inner 兜底静默成功）
+    validate_task_urgency(&urgency)?;
+    tracing::info!(note_id = %note_id, source_line, urgency = %urgency, "set_task_urgency 写回");
+    set_task_urgency_inner(&note_id, source_line, &urgency, db.inner())
 }
 
 /// 删除笔记核心逻辑：**软删除**——移到 <vault>/.helmose/trash/（可恢复），
@@ -1357,23 +1592,7 @@ mod tests {
     fn list_notes_by_tag_精确匹配() {
         use crate::commands::index::index_vault_inner;
 
-        let vid = uuid::Uuid::new_v4().to_string();
-        let vault_dir = std::env::temp_dir().join(format!(
-            "helmose_tag_vault_{}_{}",
-            std::process::id(),
-            vid
-        ));
-        std::fs::create_dir_all(&vault_dir).unwrap();
-        let db_path = std::env::temp_dir().join(format!("helmose_tag_db_{}.db", vid));
-        let db = Database::new(db_path).unwrap();
-        db.init_schema().unwrap();
-        db.sqlite()
-            .execute(
-                "INSERT INTO vaults (id,name,root_path,created_at,indexing_state,is_obsidian_shared,exclude_patterns) \
-                 VALUES (?1,'t',?2,'2026-01-01T00:00:00Z','idle',0,'[]')",
-                params![vid, vault_dir.to_string_lossy()],
-            )
-            .unwrap();
+        let (_tmp, vid, vault_dir, db) = setup_lib();
         // A: tags=["project","web"]；B: tags=["project-status:active"]
         std::fs::write(
             vault_dir.join("a.md"),
@@ -1400,30 +1619,12 @@ mod tests {
             "不应命中 B（project-status:active 是另一个标签），实际 {:?}",
             names
         );
-
-        let _ = std::fs::remove_dir_all(&vault_dir);
     }
 
     /// create_note_inner：写 vault 原文 + 索引 + 不覆盖 + 路径穿越拒（铁律：用户动作触发）。
     #[test]
     fn create_note_inner_creates_and_indexes() {
-        let vid = uuid::Uuid::new_v4().to_string();
-        let vault_dir = std::env::temp_dir().join(format!(
-            "helmose_create_vault_{}_{}",
-            std::process::id(),
-            vid
-        ));
-        std::fs::create_dir_all(&vault_dir).unwrap();
-        let db_path = std::env::temp_dir().join(format!("helmose_create_db_{}.db", vid));
-        let db = Database::new(db_path).unwrap();
-        db.init_schema().unwrap();
-        db.sqlite()
-            .execute(
-                "INSERT INTO vaults (id,name,root_path,created_at,indexing_state,is_obsidian_shared,exclude_patterns) \
-                 VALUES (?1,'t',?2,'2026-01-01T00:00:00Z','idle',0,'[]')",
-                params![vid, vault_dir.to_string_lossy()],
-            )
-            .unwrap();
+        let (_tmp, vid, vault_dir, db) = setup_lib();
 
         let rel = "07_决策与复盘/日志/2026-07/2026-07-01.md";
         let content = "# 2026-07-01\n\n## 今日待办\n- [ ] 写测试 📅 2026-07-01\n";
@@ -1459,8 +1660,6 @@ mod tests {
         // 路径穿越拒
         let err2 = create_note_inner(&vid, "../escape.md", "x", &db);
         assert!(err2.is_err(), ".. 路径应拒");
-
-        let _ = std::fs::remove_dir_all(&vault_dir);
     }
 
     /// save_note_content 集成测试：写回 vault → .helmose/backup 备份 → FTS 命中新内容 → raw_content 更新。
@@ -1471,15 +1670,9 @@ mod tests {
         use crate::commands::vault::add_vault_inner;
         use crate::models::VaultInput;
 
-        let vid = uuid::Uuid::new_v4().to_string();
-        let vault_dir = std::env::temp_dir().join(format!(
-            "helmose_lib_vault_{}_{}",
-            std::process::id(),
-            vid
-        ));
-        std::fs::create_dir_all(&vault_dir).unwrap();
-        let db_path =
-            std::env::temp_dir().join(format!("helmose_lib_db_{}_{}.db", std::process::id(), vid));
+        let _tmp = tempfile::TempDir::new().unwrap();
+        let vault_dir = _tmp.path().to_path_buf();
+        let db_path = _tmp.path().join("test.db");
         let db = Database::new(db_path).unwrap();
         db.init_schema().unwrap();
 
@@ -1548,31 +1741,13 @@ mod tests {
             .unwrap()
             .unwrap_or_default();
         assert!(raw.contains("积分商城"), "notes.raw_content 应更新为新内容");
-
-        let _ = std::fs::remove_dir_all(&vault_dir);
     }
 
     /// delete_note：软删除（移到 .helmose/trash）+ DB 级联清除 + 文件可恢复。
     #[test]
     fn delete_note_inner_软删除可恢复() {
         use crate::commands::index::index_vault_inner;
-        let vid = uuid::Uuid::new_v4().to_string();
-        let vault_dir = std::env::temp_dir().join(format!(
-            "helmose_del_vault_{}_{}",
-            std::process::id(),
-            vid
-        ));
-        std::fs::create_dir_all(&vault_dir).unwrap();
-        let db_path = std::env::temp_dir().join(format!("helmose_del_db_{}.db", vid));
-        let db = Database::new(db_path).unwrap();
-        db.init_schema().unwrap();
-        db.sqlite()
-            .execute(
-                "INSERT INTO vaults (id,name,root_path,created_at,indexing_state,is_obsidian_shared,exclude_patterns) \
-                 VALUES (?1,'t',?2,'2026-01-01T00:00:00Z','idle',0,'[]')",
-                params![vid, vault_dir.to_string_lossy()],
-            )
-            .unwrap();
+        let (_tmp, vid, vault_dir, db) = setup_lib();
         std::fs::write(vault_dir.join("a.md"), "# A\n- [ ] t\n").unwrap();
         index_vault_inner(&vid, &db).unwrap();
 
@@ -1598,30 +1773,12 @@ mod tests {
             .unwrap()
             .unwrap_or(1);
         assert_eq!(cnt, 0, "notes 行应已清除");
-
-        let _ = std::fs::remove_dir_all(&vault_dir);
     }
 
     /// create_today_note：创建今日笔记 + 幂等（已存在返回同一笔记不覆盖）。
     #[test]
     fn create_today_note_创建与幂等() {
-        let vid = uuid::Uuid::new_v4().to_string();
-        let vault_dir = std::env::temp_dir().join(format!(
-            "helmose_today_vault_{}_{}",
-            std::process::id(),
-            vid
-        ));
-        std::fs::create_dir_all(&vault_dir).unwrap();
-        let db_path = std::env::temp_dir().join(format!("helmose_today_db_{}.db", vid));
-        let db = Database::new(db_path).unwrap();
-        db.init_schema().unwrap();
-        db.sqlite()
-            .execute(
-                "INSERT INTO vaults (id,name,root_path,created_at,indexing_state,is_obsidian_shared,exclude_patterns) \
-                 VALUES (?1,'t',?2,'2026-01-01T00:00:00Z','idle',0,'[]')",
-                params![vid, vault_dir.to_string_lossy()],
-            )
-            .unwrap();
+        let (_tmp, vid, vault_dir, db) = setup_lib();
 
         let today = crate::utils::dates::today_iso();
         // 首次：创建
@@ -1637,31 +1794,13 @@ mod tests {
         // 第二次：幂等，返回同一笔记（不覆盖、不报错）
         let nc2 = create_today_note_inner(&vid, &db).expect("二次应返回已存在");
         assert_eq!(nc1.id, nc2.id, "已存在应返回同一 id，不覆盖");
-
-        let _ = std::fs::remove_dir_all(&vault_dir);
     }
 
     /// toggle_task：勾选改 checkbox [ ]→[x] 写回 vault + tasks.done 同步。
     #[test]
     fn toggle_task_inner_勾选改checkbox() {
         use crate::commands::index::index_vault_inner;
-        let vid = uuid::Uuid::new_v4().to_string();
-        let vault_dir = std::env::temp_dir().join(format!(
-            "helmose_toggle_vault_{}_{}",
-            std::process::id(),
-            vid
-        ));
-        std::fs::create_dir_all(&vault_dir).unwrap();
-        let db_path = std::env::temp_dir().join(format!("helmose_toggle_db_{}.db", vid));
-        let db = Database::new(db_path).unwrap();
-        db.init_schema().unwrap();
-        db.sqlite()
-            .execute(
-                "INSERT INTO vaults (id,name,root_path,created_at,indexing_state,is_obsidian_shared,exclude_patterns) \
-                 VALUES (?1,'t',?2,'2026-01-01T00:00:00Z','idle',0,'[]')",
-                params![vid, vault_dir.to_string_lossy()],
-            )
-            .unwrap();
+        let (_tmp, vid, vault_dir, db) = setup_lib();
         std::fs::write(
             vault_dir.join("t.md"),
             "# T\n\n- [ ] 待办\n- [x] 已完成\n",
@@ -1710,21 +1849,14 @@ mod tests {
             .unwrap()
             .unwrap_or(1);
         assert_eq!(done2, 0, "取消后 done 应回 0");
-
-        let _ = std::fs::remove_dir_all(&vault_dir);
     }
 
-    /// 行级写入测试辅助：建临时 vault + 单篇笔记 n.md，返回 (vault_dir, db, note_id)。
-    fn setup_line_vault(content: &str) -> (std::path::PathBuf, Database, String) {
-        use crate::commands::index::index_vault_inner;
+    /// 通用临时 vault + DB（TempDir RAII：drop 自动清理 vault_dir + db，零残留）。内联测试共用。
+    fn setup_lib() -> (tempfile::TempDir, String, std::path::PathBuf, Database) {
+        let tmp = tempfile::TempDir::new().unwrap();
         let vid = uuid::Uuid::new_v4().to_string();
-        let vault_dir = std::env::temp_dir().join(format!(
-            "helmose_line_vault_{}_{}",
-            std::process::id(),
-            vid
-        ));
-        std::fs::create_dir_all(&vault_dir).unwrap();
-        let db_path = std::env::temp_dir().join(format!("helmose_line_db_{}.db", vid));
+        let vault_dir = tmp.path().to_path_buf();
+        let db_path = tmp.path().join(format!("db_{}.db", vid));
         let db = Database::new(db_path).unwrap();
         db.init_schema().unwrap();
         db.sqlite()
@@ -1734,10 +1866,17 @@ mod tests {
                 params![vid, vault_dir.to_string_lossy()],
             )
             .unwrap();
+        (tmp, vid, vault_dir, db)
+    }
+
+    /// 行级写入测试辅助：建临时 vault + 单篇笔记 n.md（TempDir 自动清理）。
+    fn setup_line_vault(content: &str) -> (tempfile::TempDir, std::path::PathBuf, Database, String) {
+        use crate::commands::index::index_vault_inner;
+        let (tmp, vid, vault_dir, db) = setup_lib();
         std::fs::write(vault_dir.join("n.md"), content).unwrap();
         index_vault_inner(&vid, &db).unwrap();
         let note_id = cur_note_id(&db);
-        (vault_dir, db, note_id)
+        (tmp, vault_dir, db, note_id)
     }
 
     /// 按 file_name=n.md 查当前 note_id（写入后 content_hash 变，id 会变，每次重查）。
@@ -1754,7 +1893,7 @@ mod tests {
 
     #[test]
     fn update_line_改指定行() {
-        let (vault_dir, db, note_id) = setup_line_vault("# T\n\n## 今日待办\n- [ ] 旧任务\n");
+        let (_tmp, vault_dir, db, note_id) = setup_line_vault("# T\n\n## 今日待办\n- [ ] 旧任务\n");
         // "- [ ] 旧任务" 在第 4 行
         let nc = update_line_inner(&note_id, 4, "- [ ] 新任务", &db).expect("应改成功");
         assert!(nc.raw_content.contains("- [ ] 新任务"), "raw 应含新文本");
@@ -1769,7 +1908,7 @@ mod tests {
 
     #[test]
     fn delete_line_删指定行() {
-        let (vault_dir, db, note_id) =
+        let (_tmp, vault_dir, db, note_id) =
             setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务A\n- [ ] 任务B\n");
         let nc = delete_line_inner(&note_id, 4, &db).expect("应删成功");
         assert!(nc.raw_content.contains("任务B"), "任务B 应保留");
@@ -1779,7 +1918,7 @@ mod tests {
 
     #[test]
     fn append_bullet_追加到_section_末尾() {
-        let (vault_dir, db, note_id) =
+        let (_tmp, vault_dir, db, note_id) =
             setup_line_vault("# T\n\n## 今日待办\n- [ ] 旧\n\n## 关键事件\n- 旧事件\n");
         // 追加 task 到「今日待办」（应插在 `- [ ] 旧` 后、`## 关键事件` 前）
         let nc = append_bullet_inner(&note_id, "今日待办", "新任务", true, &db).unwrap();
@@ -1800,7 +1939,7 @@ mod tests {
 
     #[test]
     fn patch_frontmatter_改字段与插入新键() {
-        let (vault_dir, db, note_id) =
+        let (_tmp, vault_dir, db, note_id) =
             setup_line_vault("---\ntitle: P\ntype: project\npriority: 100\n---\n# P\n");
         // 改已存在 priority（save 链路返回的 raw_content 是去 fm 正文，故读盘验 fm 字段）
         patch_frontmatter_inner(&note_id, "priority", serde_json::json!(200), &db).unwrap();
@@ -1817,7 +1956,7 @@ mod tests {
 
     #[test]
     fn patch_frontmatter_无frontmatter报错() {
-        let (vault_dir, db, note_id) = setup_line_vault("# 无 fm\n");
+        let (_tmp, vault_dir, db, note_id) = setup_line_vault("# 无 fm\n");
         let err = patch_frontmatter_inner(&note_id, "priority", serde_json::json!(1), &db);
         assert!(err.is_err(), "无 frontmatter 应 Err");
         let _ = std::fs::remove_dir_all(&vault_dir);
@@ -1825,7 +1964,7 @@ mod tests {
 
     #[test]
     fn set_tag_替换status_与切换mainline() {
-        let (vault_dir, db, note_id) = setup_line_vault(
+        let (_tmp, vault_dir, db, note_id) = setup_line_vault(
             "---\ntitle: P\ntype: project\ntags: [project-status:active, web]\n---\n# P\n",
         );
         // 替换 project-status:active → paused（保留 web）；raw_content 去 fm，读盘验 tags
@@ -1860,7 +1999,7 @@ mod tests {
 
     #[test]
     fn set_tag_无tags行_新建() {
-        let (vault_dir, db, note_id) =
+        let (_tmp, vault_dir, db, note_id) =
             setup_line_vault("---\ntitle: P\ntype: project\n---\n# P\n");
         set_tag_inner(&note_id, "project-status", Some("active"), &db).unwrap();
         let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
@@ -1874,7 +2013,7 @@ mod tests {
 
     #[test]
     fn set_tag_block_array_报错不破坏原文() {
-        let (vault_dir, db, note_id) = setup_line_vault(
+        let (_tmp, vault_dir, db, note_id) = setup_line_vault(
             "---\ntitle: P\ntype: project\ntags:\n  - project-status:active\n---\n# P\n",
         );
         let err = set_tag_inner(&note_id, "project-status", Some("paused"), &db);
@@ -1892,7 +2031,7 @@ mod tests {
     /// 若直接 save_note_content(正文) 会丢 fm，故 save_note_body 读盘拼回 fm。本测试锁定该行为。
     #[test]
     fn save_note_body_保留frontmatter() {
-        let (vault_dir, db, note_id) = setup_line_vault(
+        let (_tmp, vault_dir, db, note_id) = setup_line_vault(
             "---\ntitle: T\ntype: project\ntags: [project-status:active]\npriority: 50\n---\n# T\n\n旧正文\n",
         );
         let nc = save_note_body_inner(&note_id, "# T\n\n新正文内容\n", &db).unwrap();
@@ -1909,6 +2048,222 @@ mod tests {
         assert!(!nc.raw_content.contains("title:"), "返回 raw 不应含 fm");
         // frontmatter 字段在返回值里也能取到（字段表单用）
         assert_eq!(nc.note_type.as_deref(), Some("project"), "返回 note_type 应为 project");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    // ============ M3 set_task_* 集成测试 ============
+
+    /// 取当前 note_id（按 file_name 重查，因 content_hash 变 id 会变）。
+    fn cur_line_note_id(db: &Database) -> String {
+        db.sqlite()
+            .query_row(
+                "SELECT id FROM notes WHERE file_name='n.md'",
+                &[],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    /// 取某 text 的 source_line（checkbox 类有行号；用 text 匹配不绑 note_id）。
+    fn source_line_of(db: &Database, text: &str) -> i64 {
+        db.sqlite()
+            .query_row(
+                "SELECT source_line FROM tasks WHERE text=?1",
+                params![text],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn set_task_status_inner_切换todo_done() {
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务A\n");
+        let line = source_line_of(&db, "任务A");
+        // 切 done → bullet 变 `- [x] 任务A`
+        let nc = set_task_status_inner(&note_id, line, "done", &db).expect("应成功");
+        assert!(nc.raw_content.contains("- [x] 任务A"), "raw 应含 [x] 任务A");
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("- [x] 任务A"), "vault 原文应切到 [x]");
+
+        // tasks.done 派生字段同步为 1
+        let done: i64 = db
+            .sqlite()
+            .query_row("SELECT done FROM tasks WHERE text='任务A'", &[], |r| r.get(0))
+            .unwrap()
+            .unwrap_or(0);
+        assert_eq!(done, 1, "tasks.done 应同步为 1（status=done）");
+
+        // 切回 todo → bullet 变 `- [ ] 任务A`
+        set_task_status_inner(&cur_line_note_id(&db), line, "todo", &db).unwrap();
+        let on_disk2 = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk2.contains("- [ ] 任务A"), "vault 原文应切回 [ ]");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_task_status_inner_切doing用斜杠() {
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
+        let line = source_line_of(&db, "任务");
+        let nc = set_task_status_inner(&note_id, line, "doing", &db).unwrap();
+        assert!(nc.raw_content.contains("- [/] 任务"), "doing 应切到 [/] 前缀");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_task_status_inner_emoji_刷新被清理() {
+        // bullet 内已有 🔄 → 切 todo 后 🔄 应被清理（前缀已表达 status）
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务 🔄\n");
+        let line = source_line_of(&db, "任务");
+        set_task_status_inner(&note_id, line, "todo", &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(!on_disk.contains("🔄"), "切 todo 后 🔄 应被清理");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_task_priority_inner_补星与清空() {
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
+        let line = source_line_of(&db, "任务");
+        // priority=2 → 补 ⭐⭐
+        set_task_priority_inner(&note_id, line, 2, &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("- [ ] 任务 ⭐⭐"), "应补 2 颗 ⭐");
+
+        // priority=0 → 清空所有 ⭐
+        set_task_priority_inner(&cur_line_note_id(&db), line, 0, &db).unwrap();
+        let on_disk2 = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(!on_disk2.contains("⭐"), "priority=0 应清空所有 ⭐");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_task_urgency_inner_加火与删火() {
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
+        let line = source_line_of(&db, "任务");
+        // urgency=high → 加 🔥
+        set_task_urgency_inner(&note_id, line, "high", &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("- [ ] 任务 🔥"), "应加 🔥");
+
+        // urgency=low → 删 🔥
+        set_task_urgency_inner(&cur_line_note_id(&db), line, "low", &db).unwrap();
+        let on_disk2 = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(!on_disk2.contains("🔥"), "low 应删 🔥");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_task_status_inner_越界报错() {
+        let (_tmp, vault_dir, _db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
+        let err = set_task_status_inner(&note_id, 999, "done", &_db);
+        assert!(err.is_err(), "越界 source_line 应 Err");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    /// completed_at：done 任务首次索引填入；增量重索引（编辑笔记）保留旧值不刷新。
+    /// 验证 upsert_rel 的 old_completed 缓存（跨重索引保留首完时间）。
+    #[test]
+    fn completed_at_跨增量重索引保留() {
+        let (_tmp, _vault_dir, db, _note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [x] 任务\n");
+        // 首次索引：[x] 任务 → status=done，completed_at 填 T1
+        let t1: String = db
+            .sqlite()
+            .query_row("SELECT completed_at FROM tasks WHERE text='任务'", &[], |r| r.get(0))
+            .unwrap()
+            .unwrap();
+        assert!(!t1.is_empty(), "done 任务首次索引应填 completed_at");
+
+        // 编辑笔记（追加无关 section，触发增量重索引）：completed_at 应保留 T1，不刷新
+        let cur = cur_line_note_id(&db);
+        save_note_body_inner(
+            &cur,
+            "# T\n\n## 今日待办\n- [x] 任务\n\n## 备注\n编辑触发重索引\n",
+            &db,
+        )
+        .unwrap();
+        let t2: String = db
+            .sqlite()
+            .query_row("SELECT completed_at FROM tasks WHERE text='任务'", &[], |r| r.get(0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(t2, t1, "增量重索引应保留旧 completed_at（不刷新为首完时间）");
+        let _ = &_tmp;
+    }
+
+    // ============ ux-overhaul review：白名单校验回归 ============
+
+    /// set_task_status 命令壳入口拒绝非法 status（review 要求）。
+    /// Tauri State 在单元测试不可直接构造，故测共享的 validate_task_status 纯函数
+    /// （命令壳入口与 inner 共用同一校验逻辑，覆盖此函数 = 覆盖命令壳拒绝路径）。
+    #[test]
+    fn validate_task_status_拒绝非法值() {
+        // 合法值
+        assert!(validate_task_status("todo").is_ok());
+        assert!(validate_task_status("doing").is_ok());
+        assert!(validate_task_status("done").is_ok());
+        // 非法值
+        let err = validate_task_status("bad").expect_err("非法 status 应 Err");
+        assert!(err.contains("非法 status"), "Err 文案应含「非法 status」: {}", err);
+        assert!(err.contains("bad"), "Err 文案应含原值: {}", err);
+        // 大小写敏感（避免 silent 兜底；前端契约小写）
+        assert!(validate_task_status("TODO").is_err(), "大写应拒（前端契约小写）");
+        assert!(validate_task_status("").is_err(), "空串应拒");
+        assert!(validate_task_status("done\n").is_err(), "带换行应拒");
+    }
+
+    /// set_task_urgency 命令壳入口拒绝非法 urgency。
+    #[test]
+    fn validate_task_urgency_拒绝非法值() {
+        assert!(validate_task_urgency("high").is_ok());
+        assert!(validate_task_urgency("mid").is_ok());
+        assert!(validate_task_urgency("low").is_ok());
+        let err = validate_task_urgency("urgent").expect_err("非法 urgency 应 Err");
+        assert!(err.contains("非法 urgency"), "Err 文案应含「非法 urgency」: {}", err);
+        assert!(err.contains("urgent"), "Err 应含原值");
+        assert!(validate_task_urgency("HIGH").is_err(), "大写应拒");
+    }
+
+    /// set_task_priority 命令壳入口拒绝越界 priority（替换旧 clamp 静默兜底）。
+    #[test]
+    fn validate_task_priority_拒绝越界() {
+        // 合法 0-3
+        for p in 0..=3 {
+            assert!(validate_task_priority(p).is_ok(), "priority={} 应合法", p);
+        }
+        // 越界
+        let err = validate_task_priority(-1).expect_err("priority=-1 应 Err");
+        assert!(err.contains("非法 priority"), "Err 应含「非法 priority」: {}", err);
+        assert!(err.contains("-1"), "Err 应含原值");
+        assert!(validate_task_priority(4).is_err(), "priority=4 应 Err");
+        assert!(validate_task_priority(100).is_err(), "priority=100 应 Err");
+        assert!(validate_task_priority(i32::MIN).is_err(), "i32::MIN 应 Err");
+        assert!(validate_task_priority(i32::MAX).is_err(), "i32::MAX 应 Err");
+    }
+
+    /// set_task_priority_inner 仍保留 clamp 防御（review 允许 inner 防御性 clamp）。
+    /// 锁定行为：即便绕过命令壳传 priority=99，inner 也不 panic、不写越界 ⭐，按 clamp(0,3)=3 兜底。
+    /// 这是 inner 的最后一道防线（命令壳已 Err 拦截，但 inner 自身仍要稳）。
+    #[test]
+    fn set_task_priority_inner_越界clamp防御() {
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
+        let line = source_line_of(&db, "任务");
+        // priority=99 → inner clamp 到 3（防御性兜底，不 panic）
+        let nc = set_task_priority_inner(&note_id, line, 99, &db).expect("inner 应 clamp 不 Err");
+        assert!(
+            nc.raw_content.matches('⭐').count() == 3,
+            "priority=99 应 clamp 到 3 颗 ⭐，实际 raw: {}",
+            nc.raw_content
+        );
         let _ = std::fs::remove_dir_all(&vault_dir);
     }
 }

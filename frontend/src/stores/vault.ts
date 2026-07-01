@@ -17,6 +17,8 @@ interface VaultState {
   load: () => Promise<void>;
   setVault: (v: Vault | null) => void;
   index: () => Promise<IndexStats | null>;
+  /** 手动 bump watcherTick（写后触发面板刷新，与 vault-changed 监听同效） */
+  bumpTick: () => void;
 }
 
 export const useVaultStore = create<VaultState>((set, get) => ({
@@ -38,6 +40,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   },
 
   setVault: (v) => set({ vault: v }),
+
+  bumpTick: () => set((s) => ({ watcherTick: s.watcherTick + 1 })),
 
   index: async () => {
     const v = get().vault;

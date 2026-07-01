@@ -1,0 +1,43 @@
+/* GridView 项目卡片网格样式（按域拆分） */
+.pv-grid-card {
+  position: relative;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  overflow: hidden;
+}
+
+.pv-grid-card:hover {
+  border-color: var(--ob-border-strong) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* 主线项目紫色左条（与看板主线 Tag 视觉呼应） */
+.pv-grid-card.pv-mainline::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: #722ed1;
+}
+
+.pv-grid-card .pv-grid-name {
+  font-weight: 500;
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-grid-card .pv-grid-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pv-grid-card .pv-grid-activity {
+  font-size: 11px;
+  color: var(--ob-text-faint);
+}

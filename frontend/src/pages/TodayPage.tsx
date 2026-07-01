@@ -3,7 +3,7 @@
 // 就地 CRUD：今日事件 InlineAdd 新建 + 行内 InlineEdit/删除；今日待办勾选 + InlineEdit/删除。
 // 今日笔记按钮 / 主线项目点击 → NoteEditorDrawer（不跳 tab）。竞态：useEffect cancelled flag。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -26,6 +26,7 @@ import {
   CompassOutlined,
   DeleteOutlined,
   FileAddOutlined,
+  PlusOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
@@ -35,8 +36,10 @@ import { useTabsStore } from "../stores/tabs";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import { dateKey } from "../utils/date";
 import InlineEdit from "../components/InlineEdit";
-import InlineAdd from "../components/InlineAdd";
 import NoteEditorDrawer from "../components/NoteEditorDrawer";
+import QuickAddTaskModal from "../components/QuickAddTaskModal";
+import QuickAddEventModal from "../components/QuickAddEventModal";
+import QuickAddProjectModal from "../components/QuickAddProjectModal";
 import type { Event, Project, Task } from "../types";
 
 const { Text } = Typography;
@@ -52,11 +55,18 @@ export default function TodayPage() {
   const [yesterdaySentence, setYesterdaySentence] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [drawerNoteId, setDrawerNoteId] = useState<string | null>(null);
+  // refresh 请求序号守卫：4 路 IPC 并发 + watcherTick 抖动时丢弃过期响应，避免脏写
+  const refreshSeq = useRef(0);
+  // M2：三快速创建弹窗开关（待办/事件/项目）
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [eventModalOpen, setEventModalOpen] = useState(false);
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
 
   const today = dayjs().format("YYYY-MM-DD");
 
   const refresh = async () => {
     if (!vault) return;
+    const mySeq = ++refreshSeq.current;
     setLoading(true);
     try {
       const yesterday = dayjs().subtract(1, "day").format("YYYY-MM-DD");
@@ -66,33 +76,31 @@ export default function TodayPage() {
         api.getProjects(vault.id, undefined, true),
         api.getTomorrowSentence(vault.id, yesterday),
       ]);
+      // 批量 set 前一次检查：已被更新请求覆盖则丢弃整批结果
+      if (refreshSeq.current !== mySeq) return;
       setTasks(t);
       setEvents(e);
       setProjects(p);
       setYesterdaySentence(ys);
     } catch {
+      if (refreshSeq.current !== mySeq) return;
       setTasks([]);
       setEvents([]);
       setProjects([]);
       setYesterdaySentence(null);
     } finally {
-      setLoading(false);
+      if (refreshSeq.current === mySeq) setLoading(false);
     }
   };
 
-  // cancelled flag：vault 切换/卸载时丢弃旧响应（竞态守卫）
+  // refresh 触发条件：vault 切换 / 文件监听 tick。
+  // 注意：stats 不放入 deps —— stats 是 store 中的派生缓存（index() 完成后写入），
+  // 与本页 4 路 IPC 互相独立；放 deps 会因 stats 变化触发不必要的 4 路重拉。
   useEffect(() => {
-    let cancelled = false;
     if (!vault) return;
-    (async () => {
-      await refresh();
-      if (cancelled) return;
-    })();
-    return () => {
-      cancelled = true;
-    };
+    void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vault?.id, stats, watcherTick]);
+  }, [vault?.id, watcherTick]);
 
   if (!vault) return null;
 
@@ -120,17 +128,7 @@ export default function TodayPage() {
     }
   };
 
-  // —— 事件就地 CRUD（追加到今日笔记「关键事件」section）——
-  const onAddEvent = async (text: string) => {
-    try {
-      const todayNc = await api.createTodayNote(vault.id);
-      await api.appendBullet(todayNc.id, "关键事件", text, false);
-      message.success("已新建事件");
-      await refresh();
-    } catch (e) {
-      message.error(`新建失败：${e}`);
-    }
-  };
+  // —— 事件就地编辑/删除（新建走 QuickAddEventModal，此处仅留行内编辑/删除）——
   const onEditEvent = async (ev: Event, newText: string) => {
     if (ev.source_line == null) return;
     try {
@@ -260,6 +258,13 @@ export default function TodayPage() {
                 <CheckSquareOutlined />
                 <span>今日待办</span>
                 <Tag color="blue" style={{ margin: 0 }}>{todayTasks.length}</Tag>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<PlusOutlined />}
+                  onClick={() => setTaskModalOpen(true)}
+                  aria-label="快速添加待办"
+                />
               </Space>
             }
             loading={loading}
@@ -311,16 +316,18 @@ export default function TodayPage() {
                 <CalendarOutlined />
                 <span>今日事件</span>
                 <Tag color="green" style={{ margin: 0 }}>{events.length}</Tag>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<PlusOutlined />}
+                  onClick={() => setEventModalOpen(true)}
+                  aria-label="快速添加事件"
+                />
               </Space>
             }
             loading={loading}
             style={{ height: "100%" }}
           >
-            <InlineAdd
-              placeholder="新建事件（追加今日笔记「关键事件」）"
-              onAdd={onAddEvent}
-              style={{ marginBottom: 8 }}
-            />
             {events.length === 0 ? (
               <Text type="secondary">今日无事件</Text>
             ) : (
@@ -367,6 +374,17 @@ export default function TodayPage() {
                 <CompassOutlined />
                 <span>主线项目</span>
                 <Tag color="purple" style={{ margin: 0 }}>{projects.length}</Tag>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<PlusOutlined />}
+                  // 整卡 onClick 跳项目页，按钮须拦冒泡避免触发跳转
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setProjectModalOpen(true);
+                  }}
+                  aria-label="快速创建项目"
+                />
               </Space>
             }
             hoverable
@@ -424,6 +442,23 @@ export default function TodayPage() {
         noteId={drawerNoteId}
         onClose={() => setDrawerNoteId(null)}
         onSaved={() => refresh()}
+      />
+
+      {/* M2：三快速创建弹窗。onSuccess 后 refresh 刷新今日卡数据 */}
+      <QuickAddTaskModal
+        open={taskModalOpen}
+        onCancel={() => setTaskModalOpen(false)}
+        onSuccess={() => refresh()}
+      />
+      <QuickAddEventModal
+        open={eventModalOpen}
+        onCancel={() => setEventModalOpen(false)}
+        onSuccess={() => refresh()}
+      />
+      <QuickAddProjectModal
+        open={projectModalOpen}
+        onCancel={() => setProjectModalOpen(false)}
+        onSuccess={() => refresh()}
       />
     </Space>
   );

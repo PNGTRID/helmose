@@ -1,27 +1,29 @@
 // 日历页：antd <Calendar> + 选中日期的事件/笔记列表（就地事件 CRUD + 抽屉编辑笔记，不跳 tab）。
 // 事件来自 list_events（按可见月范围），笔记来自 useAllNotesMeta。
-// 就地：InlineAdd 新建事件（追加该日日志「关键事件」）、InlineEdit/删除事件（source_line）。
+// 新建事件 → NewEventModal（ensureDayNote 注入：有则复用，无则建日志）。
 // 点击事件/笔记/创建日志 → NoteEditorDrawer（替代 openNoteFromMeta 跳 tab）。
 
-import { useEffect, useMemo, useState } from "react";
-import { Badge, Button, Calendar, Empty, List, message, Popconfirm, Space, Tag, Typography } from "antd";
-import { DeleteOutlined } from "@ant-design/icons";
+import "./CalendarPage.css";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Badge, Button, Calendar, Empty, List, message, Popconfirm, Popover, Space, Tag, Typography } from "antd";
+import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import { dateKey } from "../utils/date";
+import { dayNoteRelPath, dailyTemplate } from "../utils/journalTemplates";
 import DataState from "../components/DataState";
 import InlineEdit from "../components/InlineEdit";
-import InlineAdd from "../components/InlineAdd";
 import NoteEditorDrawer from "../components/NoteEditorDrawer";
+import NewEventModal from "../components/NewEventModal";
 import type { Event, NoteMeta } from "../types";
 
 const { Text } = Typography;
 
 /** bump watcherTick 触发 events/notes 列表刷新（写入后增量索引已完成，不调全量 index） */
-const bumpTick = () => useVaultStore.setState((s) => ({ watcherTick: s.watcherTick + 1 }));
+const bumpTick = () => useVaultStore.getState().bumpTick();
 
 export default function CalendarPage() {
   const vault = useVaultStore((s) => s.vault);
@@ -33,6 +35,9 @@ export default function CalendarPage() {
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError, setEventsError] = useState<string | null>(null);
   const [drawerNoteId, setDrawerNoteId] = useState<string | null>(null);
+  // NewEventModal：日期格 hover + / 右侧栏「新建事件」按钮触发；defaultDate 预填
+  const [eventModalOpen, setEventModalOpen] = useState(false);
+  const [eventModalDate, setEventModalDate] = useState<Dayjs | undefined>(undefined);
 
   // events：按可见月范围拉取（前后各宽 7 天）。cancelled flag 守竞态。
   useEffect(() => {
@@ -99,27 +104,32 @@ export default function CalendarPage() {
 
   if (!vault) return null;
 
-  // 该日日志相对路径（07_决策与复盘/日志/YYYY-MM/YYYY-MM-DD.md）
-  const dayNoteRelPath = (d: Dayjs) => {
-    const date = d.format("YYYY-MM-DD");
-    const month = d.format("YYYY-MM");
-    return `07_决策与复盘/日志/${month}/${date}.md`;
-  };
+  // 该日日志相对路径（07_决策与复盘/日志/YYYY-MM/YYYY-MM-DD.md）—— 复用 journalTemplates 单一源
+  const dayNoteRel = (d: Dayjs) => dayNoteRelPath(d, "daily");
 
-  // 确保该日日志存在（有则复用，无则创建），返回 note_id
+  // 确保该日日志存在（有则复用，无则创建），返回 note_id。
+  // 并发去重：同一 rel 的并发请求复用同一 Promise（审查：避免连点/批量时重复 createNote）。
+  const ensuringRef = useRef<Map<string, Promise<string>>>(new Map());
   const ensureDayNote = async (d: Dayjs): Promise<string> => {
-    const rel = dayNoteRelPath(d);
+    const rel = dayNoteRel(d);
     const existing = byRelPath.get(rel);
     if (existing) return existing.id;
-    const date = d.format("YYYY-MM-DD");
-    const tpl =
-      `---\ntitle: ${date} 日志\ncreated: ${date}\n---\n\n# ${date}\n\n` +
-      `## 今日待办\n- [ ] 示例——今日要完成的事 📅 ${date}\n\n` +
-      `## 关键事件\n- 09:00 示例——与 XX 1:1\n\n` +
-      `## 明日待办\n- 示例——明天跟进 …\n`;
-    const nc = await api.createNote(vault.id, rel, tpl);
-    bumpTick();
-    return nc.id;
+    const cache = ensuringRef.current;
+    const inflight = cache.get(rel);
+    if (inflight) return inflight;
+    const p = (async () => {
+      try {
+        // 模板复用 utils/journalTemplates.dailyTemplate（消除与 JournalPage 的漂移）
+        const tpl = dailyTemplate(d);
+        const nc = await api.createNote(vault.id, rel, tpl);
+        bumpTick();
+        return nc.id;
+      } finally {
+        cache.delete(rel); // 完成（成功/失败）后清缓存，下次按 byRelPath 复判
+      }
+    })();
+    cache.set(rel, p);
+    return p;
   };
 
   const createDayNote = async () => {
@@ -133,18 +143,13 @@ export default function CalendarPage() {
     }
   };
 
-  // —— 事件就地 CRUD ——
-  const onAddEvent = async (text: string) => {
-    if (!selected) return;
-    try {
-      const id = await ensureDayNote(selected);
-      await api.appendBullet(id, "关键事件", text, false);
-      message.success("已新建事件");
-      bumpTick();
-    } catch (e) {
-      message.error(`新建失败：${e}`);
-    }
+  // —— 事件就地 CRUD（编辑/删除保留）+ 新建事件 Modal ——
+  // 打开新建事件 Modal（日期格 + 或右侧栏按钮触发）；不传则用当前选中日或今天
+  const openEventModal = (date?: Dayjs) => {
+    setEventModalDate(date ?? selected ?? dayjs());
+    setEventModalOpen(true);
   };
+  const closeEventModal = () => setEventModalOpen(false);
   const onEditEvent = async (ev: Event, newText: string) => {
     if (ev.source_line == null) return;
     try {
@@ -191,23 +196,56 @@ export default function CalendarPage() {
               const key = date.format("YYYY-MM-DD");
               const dayEvents = byDateEvents.get(key) ?? [];
               const dayNotes = byDate.get(key) ?? [];
-              if (dayEvents.length === 0 && dayNotes.length === 0) return null;
               const isToday = key === todayKey;
+              // 折叠策略：单元格内最多列 2 条事件标题（截断），超出 +N（Popover 列全部）
+              const visibleEvents = dayEvents.slice(0, 2);
+              const moreCount = Math.max(0, dayEvents.length - 2);
+              const eventTitle = (ev: Event) => ev.title ?? ev.raw_bullet ?? "（未命名）";
               return (
-                <div
-                  style={{
-                    textAlign: "center",
-                    padding: 2,
-                    background: isToday ? "var(--ob-bg-today, rgba(124,58,237,0.08))" : "transparent",
-                    borderRadius: 4,
-                  }}
-                >
+                <div className={`cal-cell${isToday ? " cal-cell-today" : ""}`}>
+                  {/* hover 出现的 + 按钮（新建事件，预填该日期） */}
+                  <button
+                    className="cal-add-btn"
+                    title={`在 ${key} 新建事件`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openEventModal(date);
+                    }}
+                  >
+                    +
+                  </button>
                   {dayNotes.length > 0 && (
                     <Badge count={dayNotes.length} style={{ backgroundColor: "#7C3AED" }} />
                   )}
                   {dayEvents.length > 0 && (
-                    <div style={{ marginTop: 2 }}>
-                      <Badge count={dayEvents.length} style={{ backgroundColor: "#10B981" }} />
+                    <div className="cal-event-list">
+                      {visibleEvents.map((ev, i) => (
+                        <div key={i} className="cal-event-item" title={eventTitle(ev)}>
+                          {ev.event_time ? `${ev.event_time} ` : ""}
+                          {eventTitle(ev)}
+                        </div>
+                      ))}
+                      {moreCount > 0 && (
+                        <Popover
+                          trigger="hover"
+                          placement="rightTop"
+                          title={`${key} 共 ${dayEvents.length} 条事件`}
+                          content={
+                            <div style={{ maxWidth: 280 }}>
+                              {dayEvents.map((ev, i) => (
+                                <div key={i} style={{ fontSize: 12, marginBottom: 2 }}>
+                                  <Tag color="green" style={{ margin: 0, marginRight: 6, flexShrink: 0 }}>
+                                    {ev.event_time ?? "—"}
+                                  </Tag>
+                                  {eventTitle(ev)}
+                                </div>
+                              ))}
+                            </div>
+                          }
+                        >
+                          <div className="cal-more">+{moreCount} 更多</div>
+                        </Popover>
+                      )}
                     </div>
                   )}
                 </div>
@@ -239,11 +277,17 @@ export default function CalendarPage() {
             : "选中日期的笔记与事件"}
         </Text>
         {selected && (
-          <InlineAdd
-            placeholder="新建事件（追加该日日志「关键事件」）"
-            onAdd={onAddEvent}
+          <Button
+            block
+            size="small"
+            type="primary"
+            ghost
+            icon={<PlusOutlined />}
+            onClick={() => openEventModal(selected)}
             style={{ marginBottom: 8 }}
-          />
+          >
+            新建事件
+          </Button>
         )}
         {selectedEvents.length === 0 && selectedNotes.length === 0 ? (
           <>
@@ -322,6 +366,17 @@ export default function CalendarPage() {
           />
         )}
       </div>
+      <NewEventModal
+        open={eventModalOpen}
+        defaultDate={eventModalDate}
+        ensureNote={ensureDayNote}
+        onCancel={closeEventModal}
+        onSuccess={() => {
+          // 关闭弹窗 + bumpTick 刷新事件/笔记列表（watcherTick 驱动 events useEffect 重拉）
+          closeEventModal();
+          bumpTick();
+        }}
+      />
       <NoteEditorDrawer
         open={!!drawerNoteId}
         noteId={drawerNoteId}

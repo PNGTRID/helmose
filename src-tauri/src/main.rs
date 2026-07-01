@@ -62,6 +62,10 @@ pub fn run() {
             commands::library::save_note_content,
             commands::library::save_note_body,
             commands::library::toggle_task,
+            // M3：任务字段就地写入（status / priority / urgency）
+            commands::library::set_task_status,
+            commands::library::set_task_priority,
+            commands::library::set_task_urgency,
             // 行级就地写入（inline-crud）
             commands::library::update_line,
             commands::library::delete_line,
@@ -83,6 +87,8 @@ pub fn run() {
             commands::tasks::get_tasks,
             // 项目
             commands::projects::get_projects,
+            // M5：项目进度聚合（运行时聚合，不入 frontmatter）
+            commands::projects::get_project_progress,
             // 事件（日历用）
             commands::events::list_events,
             // 脚手架（新建知识库骨架）

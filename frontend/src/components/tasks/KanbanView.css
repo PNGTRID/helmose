@@ -1,0 +1,55 @@
+/* KanbanView：看板三列布局 */
+.kanban-board {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  width: 100%;
+}
+
+.kanban-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 300px;
+  background: var(--ob-bg-alt, #fafafa);
+  border: 1px solid var(--ob-border, #e5e7eb);
+  border-radius: 8px;
+  padding: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.kanban-col.over {
+  background: var(--ob-primary-bg, #eff6ff);
+  border-color: var(--ob-primary, #3b82f6);
+}
+
+.kanban-col-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--ob-border, #e5e7eb);
+}
+
+.kanban-col-body {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 70vh;
+}
+
+/* 暗色模式 */
+html.dark .kanban-col {
+  background: var(--ob-bg-alt, #1a1a1a);
+  border-color: var(--ob-border, #303030);
+}
+
+html.dark .kanban-col.over {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* 小屏退化为单列 */
+@media (max-width: 768px) {
+  .kanban-board {
+    grid-template-columns: 1fr;
+  }
+}

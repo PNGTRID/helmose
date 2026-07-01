@@ -1,0 +1,14 @@
+/* QuickAddEventModal 样式（按域拆分） */
+.qa-event-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.qa-event-time {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}

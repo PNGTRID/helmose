@@ -1,0 +1,58 @@
+/* TaskCard：任务卡片样式（亮/暗通吃，用 CSS 变量）。 */
+.task-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: var(--ob-bg, #fff);
+  border: 1px solid var(--ob-border, #e5e7eb);
+  border-radius: 6px;
+  cursor: grab;
+  transition: box-shadow 0.15s, border-color 0.15s;
+  user-select: none;
+}
+
+.task-card:hover {
+  border-color: var(--ob-primary, #3b82f6);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.task-card.compact {
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.task-card.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.task-card-main {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.task-card-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-card-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.task-card-lock {
+  font-size: 12px;
+  opacity: 0.5;
+  cursor: help;
+}
+
+/* 暗色模式（html.dark 由 theme.ts 切换） */
+html.dark .task-card {
+  background: var(--ob-bg, #1f1f1f);
+  border-color: var(--ob-border, #303030);
+}

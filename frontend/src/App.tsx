@@ -2,7 +2,7 @@
 // Ribbon + 左文件面板（可拖拽宽）+ 中标签页编辑区 + 右反向链接面板（可拖拽宽）+ 底状态栏
 import "./components/App.css";
 import { useEffect, useState, type MouseEvent } from "react";
-import { Modal, Spin } from "antd";
+import { App as AntdApp, Modal, Spin } from "antd";
 import * as api from "./api";
 import { useVaultStore } from "./stores/vault";
 import { useTabsStore } from "./stores/tabs";
@@ -25,6 +25,9 @@ import JournalPage from "./pages/JournalPage";
 import SettingsPage from "./pages/SettingsPage";
 
 export default function App() {
+  // 经 antd <App>（main.tsx 已包）拿 context 化的 message：消费 ConfigProvider locale（task 6）。
+  // 硬编码中文文案不受 locale 影响，但走 useApp 模式与 antd 6 推荐一致（why-not-static）。
+  const { message } = AntdApp.useApp();
   const { vault, loading, load } = useVaultStore();
   const tabs = useTabsStore((s) => s.tabs);
   const activeId = useTabsStore((s) => s.activeId);
@@ -71,8 +74,13 @@ export default function App() {
         e.preventDefault();
         s.toggleFile();
       } else if (k === "\\") {
-        // 切换右侧栏
+        // 切换右侧栏：仅笔记页可用（侧栏内容是大纲/反链，非 note 页无意义）
         e.preventDefault();
+        const cur = s.tabs.find((t) => t.id === s.activeId);
+        if (cur?.type !== "note") {
+          message.info("侧栏仅在笔记页可用");
+          return;
+        }
         s.toggleSide();
       } else if (k === "?") {
         // 帮助（避免在输入框内触发）
@@ -161,8 +169,11 @@ export default function App() {
         </div>
         <StatusBar />
       </div>
-      {sidePanelOpen && <div className="ob-resizer" onMouseDown={startResize("side")} />}
-      {sidePanelOpen && <SidePanel width={sideWidth} />}
+      {/* M4：侧栏仅在笔记页显示（大纲/反链对非 note 页无意义） */}
+      {sidePanelOpen && active?.type === "note" && (
+        <div className="ob-resizer" onMouseDown={startResize("side")} />
+      )}
+      {sidePanelOpen && active?.type === "note" && <SidePanel width={sideWidth} />}
       <CommandPalette />
       <Modal
         open={helpOpen}

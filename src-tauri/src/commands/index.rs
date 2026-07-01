@@ -171,9 +171,17 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                 for t in &p.tasks {
                     let tid = uuid::Uuid::new_v4().to_string();
                     let created = crate::utils::dates::now_iso8601();
+                    // completed_at：status='done' 记录完成时间。与 created_at 同源近似——
+                    // 重索引会刷新（首完时间难跨重索引保留，留 backlog），但修复了「done 任务永远 NULL」。
+                    let completed_at: Option<String> = if t.status == "done" {
+                        Some(crate::utils::dates::now_iso8601())
+                    } else {
+                        None
+                    };
                     tx.execute(
-                        "INSERT INTO tasks (id,note_id,vault_id,text,done,due_date,source,source_line,created_at) \
-                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                        "INSERT INTO tasks \
+                         (id,note_id,vault_id,text,done,due_date,source,source_line,created_at,completed_at,status,priority,urgency) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                         params![
                             tid,
                             id,
@@ -183,7 +191,11 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                             t.due_date,
                             t.source,
                             t.source_line,
-                            created
+                            created,
+                            completed_at,
+                            t.status,
+                            t.priority,
+                            t.urgency
                         ],
                     )?;
                     stats.tasks += 1;
@@ -213,14 +225,21 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                 }
             }
 
-            // 第三遍：projects（全局 pass 后的 records → projects 表全字段）
+            // 第三遍：projects（全局 pass 后的 records → projects 表全字段）。
+            // 同时建 name → projects.id 映射，供第六遍回填 tasks.project_id（frontmatter.project 关联）。
+            let mut proj_name_to_id: HashMap<String, String> = HashMap::new();
             for (id, info) in &project_records {
+                let pid = uuid::Uuid::new_v4().to_string();
+                // 同名项目取首个（与 stem_to_id 同口径，稳定优先）
+                proj_name_to_id
+                    .entry(info.name.clone())
+                    .or_insert_with(|| pid.clone());
                 tx.execute(
                     "INSERT INTO projects \
-                     (id,vault_id,note_id,name,status,priority,is_mainline,okr_priority,home_rel_path,last_activity) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                     (id,vault_id,note_id,name,status,priority,is_mainline,okr_priority,home_rel_path,last_activity,owner) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                     params![
-                        uuid::Uuid::new_v4().to_string(),
+                        pid,
                         vault_id,
                         id,
                         info.name,
@@ -230,6 +249,7 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                         info.okr_priority,
                         info.home_rel_path,
                         info.last_activity,
+                        info.owner,
                     ],
                 )?;
             }
@@ -277,6 +297,26 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                             date,
                             s
                         ],
+                    )?;
+                }
+            }
+
+            // 第六遍：回填 tasks + events 的 project_id —— frontmatter.project（项目名）按名匹配 projects。
+            // 契约：frontmatter.project 为项目名字符串（Obsidian 习惯）。同笔记的 tasks 与 events 共享关联
+            // （让 get_project_progress 聚合生效 + 日历事件可按项目筛）。匹配不到 → project_id 保持 NULL。
+            for (id, p) in &with_id {
+                let proj_name = match p.frontmatter.get("project").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if let Some(pid) = proj_name_to_id.get(proj_name) {
+                    tx.execute(
+                        "UPDATE tasks SET project_id = ?1 WHERE note_id = ?2 AND vault_id = ?3",
+                        params![pid, id, vault_id],
+                    )?;
+                    tx.execute(
+                        "UPDATE events SET project_id = ?1 WHERE note_id = ?2 AND vault_id = ?3",
+                        params![pid, id, vault_id],
                     )?;
                 }
             }
@@ -375,14 +415,13 @@ pub fn should_reindex(vault_id: String, db: State<'_, Database>) -> Result<bool,
 mod tests {
     use super::*;
 
-    /// 构造临时 vault + 临时 DB + 注册 vault（复用 incremental::tests::setup 模式）。
-    /// pid+uuid 唯一目录隔离，不依赖 ~/wiki。
-    fn setup() -> (String, std::path::PathBuf, Database) {
+    /// 构造临时 vault + 临时 DB + 注册 vault（TempDir RAII：drop 自动清理，零残留）。
+    fn setup() -> (tempfile::TempDir, String, std::path::PathBuf, Database) {
+        let tmp = tempfile::TempDir::new().unwrap();
         let vid = uuid::Uuid::new_v4().to_string();
-        let tag = format!("{}_{}", std::process::id(), vid);
-        let vault_dir = std::env::temp_dir().join(format!("helmose_idx_vault_{}", tag));
+        let vault_dir = tmp.path().join(format!("vault_{}", vid));
         std::fs::create_dir_all(&vault_dir).unwrap();
-        let db_path = std::env::temp_dir().join(format!("helmose_idx_db_{}.db", tag));
+        let db_path = tmp.path().join("test.db");
         let db = Database::new(db_path).unwrap();
         db.init_schema().unwrap();
         db.sqlite()
@@ -392,7 +431,7 @@ mod tests {
                 params![vid, vault_dir.to_string_lossy()],
             )
             .unwrap();
-        (vid, vault_dir, db)
+        (tmp, vid, vault_dir, db)
     }
 
     /// 写 3 个 md：① type:project frontmatter；② 普通笔记（stem=目标，供 wikilink 命中）；
@@ -419,7 +458,7 @@ mod tests {
     /// projects 命中 type=project / tasks 有行 / links 外键有效。
     #[test]
     fn index_vault_inner_writes_full_pipeline() {
-        let (vid, vault_dir, db) = setup();
+        let (_tmp, vid, vault_dir, db) = setup();
         seed(&vault_dir);
 
         let stats = index_vault_inner(&vid, &db).expect("index_vault_inner 应成功");
@@ -521,7 +560,7 @@ mod tests {
     /// 移动文件（改 rel_path，内容不变）→ 重新索引 → note id 不变（content_hash 稳定）。
     #[test]
     fn index_vault_inner_id_stable_on_move() {
-        let (vid, vault_dir, db) = setup();
+        let (_tmp, vid, vault_dir, db) = setup();
         seed(&vault_dir);
 
         index_vault_inner(&vid, &db).unwrap();
@@ -560,7 +599,7 @@ mod tests {
     /// 删其一、重新全量 → 剩余方退出碰撞态，id 从 hash#short 回到纯 hash（已知边缘，见上文注释）。
     #[test]
     fn index_vault_inner_collision_disambiguates() {
-        let (vid, vault_dir, db) = setup();
+        let (_tmp, vid, vault_dir, db) = setup();
         // 两篇内容字节完全相同（不同文件名）
         let same = "# 完全相同的内容\n\n- [x] 同一份待办\n";
         std::fs::write(vault_dir.join("a.md"), same).unwrap();
@@ -632,7 +671,7 @@ mod tests {
     /// B 无 priority/mainline（验兜底 150 + top-3 补主线）。
     #[test]
     fn index_vault_inner_projects_full_fields() {
-        let (vid, vault_dir, db) = setup();
+        let (_tmp, vid, vault_dir, db) = setup();
         // A：明确 priority=90 + mainline:true + okr:P0，放自己子目录（父目录非顶层 → 扫描 last_activity）
         std::fs::create_dir_all(vault_dir.join("01_企业与项目资产/项目A")).unwrap();
         std::fs::write(
@@ -687,7 +726,7 @@ mod tests {
     /// M2：events 表写库（从 experience 笔记的「关键事件」section 提取 bullet）。
     #[test]
     fn index_vault_inner_events_extracted() {
-        let (vid, vault_dir, db) = setup();
+        let (_tmp, vid, vault_dir, db) = setup();
         std::fs::create_dir_all(vault_dir.join("05_个人成长与认知资产/经历/2026-04")).unwrap();
         std::fs::write(
             vault_dir.join("05_个人成长与认知资产/经历/2026-04/2026-04-01.md"),
@@ -801,5 +840,97 @@ mod tests {
         assert!(stats.notes > 100, "真 wiki 应 >100 笔记，实际 {}", stats.notes);
 
         let _ = std::fs::remove_file(std::env::temp_dir().join(format!("helmose_realwiki_db_{}.db", tag)));
+    }
+
+    /// M3 migration 幂等性：init_schema 连续调两次不应报错（PRAGMA table_info 守列存在性，
+    /// 新库 CREATE 自带列会跳过 ALTER）。同时验证 status/priority/urgency/owner 列确实存在。
+    #[test]
+    fn init_schema_幂等_含_m3_m5_新列() {
+        let tag = format!("{}_{}", std::process::id(), uuid::Uuid::new_v4());
+        let db_path = std::env::temp_dir().join(format!("helmose_idem_db_{}.db", tag));
+        let db = Database::new(db_path).unwrap();
+        // 第一次：新库 CREATE 自带 status/priority/urgency/owner
+        db.init_schema().expect("第一次 init_schema 应成功");
+        // 第二次：列已存在，PRAGMA 应跳过 ALTER（不报 duplicate column）
+        db.init_schema().expect("第二次 init_schema 应幂等成功");
+
+        // 验证 tasks 表 4 列存在（status / priority / urgency + 旧列 done）
+        let task_cols: Vec<String> = db
+            .sqlite()
+            .query_map("PRAGMA table_info(tasks)", &[], |r| r.get::<_, String>(1))
+            .unwrap();
+        for needed in ["status", "priority", "urgency", "done"] {
+            assert!(
+                task_cols.iter().any(|c| c == needed),
+                "tasks 表应有 {} 列，实际 {:?}",
+                needed,
+                task_cols
+            );
+        }
+
+        // 验证 projects 表 owner 列
+        let proj_cols: Vec<String> = db
+            .sqlite()
+            .query_map("PRAGMA table_info(projects)", &[], |r| r.get::<_, String>(1))
+            .unwrap();
+        assert!(
+            proj_cols.iter().any(|c| c == "owner"),
+            "projects 表应有 owner 列，实际 {:?}",
+            proj_cols
+        );
+    }
+
+    /// M3 旧库 backfill：模拟旧库 tasks 行（done=1，无 status 列）→ init_schema 后 status='done' 反填。
+    /// 验证迁移不会让旧的 done 任务退化为 todo。
+    #[test]
+    fn migrate_旧库done任务反填status_done() {
+        use crate::services::database_sqlite::SqliteDatabase;
+        let tag = format!("{}_{}", std::process::id(), uuid::Uuid::new_v4());
+        let db_path = std::env::temp_dir().join(format!("helmose_backfill_db_{}.db", tag));
+        // 先建一个「旧 schema」库（无 status/priority/urgency/owner）
+        {
+            let old = SqliteDatabase::new(db_path.clone()).unwrap();
+            old.execute(
+                "CREATE TABLE vaults (id TEXT PRIMARY KEY, name TEXT, root_path TEXT, created_at TEXT, last_indexed TEXT, indexing_state TEXT, is_obsidian_shared INTEGER, exclude_patterns TEXT)",
+                &[],
+            )
+            .unwrap();
+            old.execute(
+                "CREATE TABLE notes (id TEXT PRIMARY KEY, vault_id TEXT, rel_path TEXT, file_name TEXT, title TEXT, note_type TEXT, layer INTEGER, date_iso TEXT, week_iso TEXT, tags TEXT, frontmatter TEXT, raw_content TEXT, mtime INTEGER, content_hash TEXT)",
+                &[],
+            )
+            .unwrap();
+            // 旧 tasks 表：无 status/priority/urgency 列
+            old.execute(
+                "CREATE TABLE tasks (id TEXT PRIMARY KEY, note_id TEXT, vault_id TEXT, text TEXT, done INTEGER, due_date TEXT, source TEXT, source_line INTEGER, project_id TEXT, created_at TEXT, completed_at TEXT)",
+                &[],
+            )
+            .unwrap();
+            // 旧 projects 表：无 owner 列
+            old.execute(
+                "CREATE TABLE projects (id TEXT PRIMARY KEY, vault_id TEXT, note_id TEXT, name TEXT, status TEXT, priority REAL, is_mainline INTEGER, okr_priority TEXT, home_rel_path TEXT, last_activity TEXT)",
+                &[],
+            )
+            .unwrap();
+            // 一行旧任务 done=1
+            old.execute(
+                "INSERT INTO tasks (id,note_id,vault_id,text,done,source,created_at) VALUES ('t1','n1','v1','旧完成',1,'checkbox','2026-01-01')",
+                &[],
+            )
+            .unwrap();
+        }
+        // 现在用 Database 包装，触发 migrate（应补 status 列 + backfill status='done'）
+        let db = Database::new(db_path).unwrap();
+        db.init_schema().expect("migrate 应成功");
+        let status: String = db
+            .sqlite()
+            .query_row(
+                "SELECT status FROM tasks WHERE id='t1'",
+                &[],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, "done", "旧 done=1 任务应被 backfill 为 status='done'");
     }
 }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Helmose Info.plist 本地化覆写片段
+  · 作用：声明 app 支持简体中文，让 macOS 系统级菜单（含 WKWebView 右键 Copy/Paste/Look Up/Search/Share）
+    跟随系统语言（中文）显示，根治「右键菜单英文」问题。
+  · Tauri bundler 在 release 构建时会将本文件 merge 到生成的 .app/Contents/Info.plist（不覆盖必需字段如 identifier/version）。
+  · ⚠️ 已知限制：tauri dev（开发模式）不打包 bundle，本文件不生效——dev 下右键英文是 macOS 行为，非 bug。
+    验证须 release 构建：`cd frontend && npm run tauri:build` 后 `plutil -p src-tauri/target/release/bundle/macos/Helmose.app/Contents/Info.plist | grep -i localizations`。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/Property-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>zh-Hans</string>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>zh-Hans</string>
+    <string>en</string>
+  </array>
+</dict>
+</plist>

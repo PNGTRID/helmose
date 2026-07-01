@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { AgentExport, Backlink, BackupInfo, Event, GraphData, IndexStats, Note, NoteContent, NoteMeta, Project, ScaffoldStats, SearchResult, TagCount, Task, UpdateStatus, Vault, VaultInput } from '../types';
+import type { AgentExport, Backlink, BackupInfo, Event, GraphData, IndexStats, Note, NoteContent, NoteMeta, Project, ProjectProgress, ScaffoldStats, SearchResult, TagCount, Task, UpdateStatus, Vault, VaultInput } from '../types';
 
 export async function ping(): Promise<string> {
   return invoke<string>('ping');
@@ -60,12 +60,21 @@ export async function getNotesStats(
 export async function getTasks(
   vaultId: string,
   done?: boolean,
-  limit?: number
+  limit?: number,
+  /** M3：状态精确筛选（'todo' | 'doing' | 'done'） */
+  status?: string,
+  /** M3：按项目 ID 精确筛选 */
+  projectId?: string,
+  /** M3：优先级下限（>= priorityMin） */
+  priorityMin?: number
 ): Promise<Task[]> {
   return invoke<Task[]>('get_tasks', {
     vaultId,
     done: done ?? null,
     limit: limit ?? null,
+    status: status ?? null,
+    projectId: projectId ?? null,
+    priorityMin: priorityMin ?? null,
   });
 }
 
@@ -327,6 +336,49 @@ export async function getProjects(
     byMainline: byMainline ?? null,
     byPriority: byPriority ?? null,
   });
+}
+
+// ============================================================
+// M3 任务字段就地写入（status / priority / urgency）
+// 三命令改 bullet 行内容写回 vault（备份+重索引），返回新 NoteContent。
+// source_line==null（聚合 section 任务）不支持，后端会 Err。
+// ============================================================
+
+/** 改任务状态（todo/doing/done）。看板跨列拖拽 / 行内 status 切换触发。 */
+export async function setTaskStatus(
+  noteId: string,
+  sourceLine: number,
+  status: string
+): Promise<NoteContent> {
+  return invoke<NoteContent>('set_task_status', { noteId, sourceLine, status });
+}
+
+/** 改任务优先级（0-3，0=清空 ⭐）。四象限拖拽 / 行内 ⭐ 切换触发。 */
+export async function setTaskPriority(
+  noteId: string,
+  sourceLine: number,
+  priority: number
+): Promise<NoteContent> {
+  return invoke<NoteContent>('set_task_priority', { noteId, sourceLine, priority });
+}
+
+/** 改任务紧急度（'high' 加 🔥，其他删 🔥）。四象限拖拽 / 行内 🔥 切换触发。
+ *  注：派生（按 due_date 推导）只在前端，本命令只对手动 🔥 增删。 */
+export async function setTaskUrgency(
+  noteId: string,
+  sourceLine: number,
+  urgency: string
+): Promise<NoteContent> {
+  return invoke<NoteContent>('set_task_urgency', { noteId, sourceLine, urgency });
+}
+
+// ============================================================
+// M5 项目进度聚合（运行时聚合，不入 frontmatter）
+// ============================================================
+
+/** 取所有项目的进度（total/done/due_overdue）。ProjectsPage 进度视图触发。 */
+export async function getProjectProgress(vaultId: string): Promise<ProjectProgress[]> {
+  return invoke<ProjectProgress[]>('get_project_progress', { vaultId });
 }
 
 /** 查询事件（可按 event_date 区间 [from, to] 过滤，YYYY-MM-DD） */

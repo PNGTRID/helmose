@@ -28,6 +28,8 @@ pub struct ProjectInfo {
     pub activity_mtime: i64,
     /// 全局 pass 填的 ISO8601 字符串（前端相对时间用）
     pub last_activity: Option<String>,
+    /// M5：负责人（frontmatter.owner 字符串，无则 None）
+    pub owner: Option<String>,
 }
 
 /// 判定并提取项目信息（本地字段）。非 project 类型返回 None。
@@ -83,6 +85,13 @@ pub fn extract(p: &ParsedNote) -> Option<ProjectInfo> {
                 .map(|_| "goal".to_string())
         });
 
+    // M5：owner（frontmatter.owner 字符串）
+    let owner = p
+        .frontmatter
+        .get("owner")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
     Some(ProjectInfo {
         name,
         status,
@@ -92,6 +101,7 @@ pub fn extract(p: &ParsedNote) -> Option<ProjectInfo> {
         okr_priority,
         activity_mtime: p.mtime,
         last_activity: None,
+        owner,
     })
 }
 
@@ -193,6 +203,7 @@ mod tests {
                 okr_priority: None,
                 activity_mtime: mtime,
                 last_activity: None,
+                owner: None,
             },
         )
     }

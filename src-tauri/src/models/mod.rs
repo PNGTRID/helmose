@@ -13,7 +13,7 @@ pub mod vault;
 pub use event::Event;
 pub use life_state::AgentExport;
 pub use note::{Backlink, GraphData, GraphEdge, GraphNode, Note, NoteContent, NoteMeta, SearchResult};
-pub use project::Project;
+pub use project::{Project, ProjectProgress};
 pub use scaffold::ScaffoldStats;
 pub use task::Task;
 pub use vault::{IndexingState, Vault, VaultInput};

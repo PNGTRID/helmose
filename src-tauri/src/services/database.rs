@@ -57,6 +57,51 @@ impl Database {
                 .execute("ALTER TABLE events ADD COLUMN source_line INTEGER", &[])
                 .map_err(|e| format!("migrate events.source_line failed: {:?}", e))?;
         }
+
+        // M3：tasks 加 status / priority / urgency 三列；旧数据 done=1 反填 status='done'
+        let task_cols: Vec<String> = self
+            .sqlite()
+            .query_map("PRAGMA table_info(tasks)", &[], |r| r.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        if !task_cols.iter().any(|c| c == "status") {
+            self.sqlite()
+                .execute(
+                    "ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'todo'",
+                    &[],
+                )
+                .map_err(|e| format!("migrate tasks.status failed: {:?}", e))?;
+        }
+        if !task_cols.iter().any(|c| c == "priority") {
+            self.sqlite()
+                .execute(
+                    "ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+                    &[],
+                )
+                .map_err(|e| format!("migrate tasks.priority failed: {:?}", e))?;
+        }
+        if !task_cols.iter().any(|c| c == "urgency") {
+            self.sqlite()
+                .execute(
+                    "ALTER TABLE tasks ADD COLUMN urgency TEXT NOT NULL DEFAULT 'low'",
+                    &[],
+                )
+                .map_err(|e| format!("migrate tasks.urgency failed: {:?}", e))?;
+        }
+        // done=1 反填 status='done'（幂等：只在新增 status 列那次跑过即可，多次执行也无副作用）
+        self.sqlite()
+            .execute("UPDATE tasks SET status='done' WHERE done=1 AND status<>'done'", &[])
+            .map_err(|e| format!("migrate tasks backfill status failed: {:?}", e))?;
+
+        // M5：projects 加 owner 列
+        let proj_cols: Vec<String> = self
+            .sqlite()
+            .query_map("PRAGMA table_info(projects)", &[], |r| r.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        if !proj_cols.iter().any(|c| c == "owner") {
+            self.sqlite()
+                .execute("ALTER TABLE projects ADD COLUMN owner TEXT", &[])
+                .map_err(|e| format!("migrate projects.owner failed: {:?}", e))?;
+        }
         Ok(())
     }
 }
@@ -107,7 +152,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   source_line INTEGER,
   project_id TEXT,
   created_at TEXT NOT NULL,
-  completed_at TEXT
+  completed_at TEXT,
+  -- M3：状态/优先级/紧急度（新库自带；旧库由 migrate() ALTER 补）
+  status TEXT NOT NULL DEFAULT 'todo',
+  priority INTEGER NOT NULL DEFAULT 0,
+  urgency TEXT NOT NULL DEFAULT 'low'
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks(done);
@@ -137,7 +186,9 @@ CREATE TABLE IF NOT EXISTS projects (
   is_mainline INTEGER NOT NULL DEFAULT 0,
   okr_priority TEXT,
   home_rel_path TEXT,
-  last_activity TEXT
+  last_activity TEXT,
+  -- M5：负责人（新库自带；旧库由 migrate() ALTER 补）
+  owner TEXT
 );
 
 CREATE TABLE IF NOT EXISTS okrs (

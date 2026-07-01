@@ -376,6 +376,20 @@ export default function SettingsPage() {
           </Popconfirm>
         </Space>
       </Card>
+
+      <Card title="关于本地化">
+        <Space direction="vertical" size="small">
+          <Text type="secondary">
+            应用界面、菜单、右键菜单跟随系统语言（简体中文）。
+          </Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            · macOS 系统级菜单（含 WKWebView 右键 Copy / Paste / Look Up / Search / Share）的语言由 app bundle 声明的本地化决定，已声明 zh-Hans。
+            <br />
+            · <Text strong>仅 release 构建生效</Text>——开发模式（tauri dev）不打包 bundle，右键英文是已知行为，非 bug。
+            <br />· antd 组件（弹窗 / 日期选择器 / 表单）已统一中文 locale。
+          </Text>
+        </Space>
+      </Card>
     </Space>
   );
 }

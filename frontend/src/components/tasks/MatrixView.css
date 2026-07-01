@@ -1,0 +1,61 @@
+/* MatrixView：四象限 2x2 网格 */
+.matrix-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+  min-height: 500px;
+}
+
+.matrix-box {
+  display: flex;
+  flex-direction: column;
+  background: var(--ob-bg, #fff);
+  border: 2px solid;
+  border-radius: 8px;
+  padding: 8px;
+  transition: background 0.15s;
+  min-height: 200px;
+}
+
+.matrix-box.over {
+  background: var(--ob-primary-bg, #eff6ff);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.matrix-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid;
+}
+
+.matrix-box-body {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 35vh;
+}
+
+.matrix-axes {
+  margin-top: 8px;
+  text-align: center;
+}
+
+html.dark .matrix-box {
+  background: var(--ob-bg, #1f1f1f);
+}
+
+html.dark .matrix-box.over {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* 小屏退化为单列堆叠 */
+@media (max-width: 768px) {
+  .matrix-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+}

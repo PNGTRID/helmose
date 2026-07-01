@@ -102,6 +102,34 @@ pub fn upsert_rel(
                 );
             }
 
+            // 1.5 缓存旧 done task 的 completed_at（按 source_line+text 匹配）。
+            //    跨重索引保留首完时间：步骤2 DELETE notes 会 CASCADE 删旧 tasks，
+            //    步骤4 INSERT 新 task 时优先复用旧 completed_at，避免编辑已 done 任务时完成时间被刷新。
+            let old_completed: std::collections::HashMap<(Option<i32>, String), String> = {
+                let mut m = std::collections::HashMap::new();
+                if let Some((old_id, _, _, _, _)) = &old {
+                    let mut stmt = tx.prepare(
+                        "SELECT source_line, text, completed_at FROM tasks \
+                         WHERE note_id = ?1 AND completed_at IS NOT NULL",
+                    )?;
+                    let rows = stmt.query_map(params![old_id], |r| {
+                        Ok((
+                            r.get::<_, Option<i32>>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    });
+                    if let Ok(rows) = rows {
+                        for row in rows {
+                            if let Ok((sl, text, ts)) = row {
+                                m.insert((sl, text), ts);
+                            }
+                        }
+                    }
+                }
+                m
+            };
+
             // 2. note id = content_hash（稳定，移动不变）；删旧 note 后检测碰撞：
             //    同 vault 若已有同 hash 的别的 rel_path → 加 rel_path 短哈希消歧
             let base_hash = p
@@ -159,9 +187,19 @@ pub fn upsert_rel(
             )?;
             // 4. 重建该 note 的 tasks
             for t in &p.tasks {
+                // completed_at：status='done' 优先复用旧值（跨重索引保留首完时间），无旧值才记 now。
+                let completed_at: Option<String> = if t.status == "done" {
+                    old_completed
+                        .get(&(t.source_line, t.text.clone()))
+                        .cloned()
+                        .or_else(|| Some(dates::now_iso8601()))
+                } else {
+                    None
+                };
                 tx.execute(
-                    "INSERT INTO tasks (id,note_id,vault_id,text,done,due_date,source,source_line,created_at) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                    "INSERT INTO tasks \
+                     (id,note_id,vault_id,text,done,due_date,source,source_line,created_at,completed_at,status,priority,urgency) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                     params![
                         uuid::Uuid::new_v4().to_string(),
                         id,
@@ -171,7 +209,11 @@ pub fn upsert_rel(
                         t.due_date,
                         t.source,
                         t.source_line,
-                        dates::now_iso8601()
+                        dates::now_iso8601(),
+                        completed_at,
+                        t.status,
+                        t.priority,
+                        t.urgency
                     ],
                 )?;
             }
@@ -211,8 +253,8 @@ pub fn upsert_rel(
                 info.last_activity = Some(crate::utils::dates::secs_to_iso8601(info.activity_mtime));
                 tx.execute(
                     "INSERT INTO projects \
-                     (id,vault_id,note_id,name,status,priority,is_mainline,okr_priority,home_rel_path,last_activity) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                     (id,vault_id,note_id,name,status,priority,is_mainline,okr_priority,home_rel_path,last_activity,owner) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                     params![
                         uuid::Uuid::new_v4().to_string(),
                         vault_id,
@@ -224,6 +266,7 @@ pub fn upsert_rel(
                         info.okr_priority,
                         info.home_rel_path,
                         info.last_activity,
+                        info.owner,
                     ],
                 )?;
             }
@@ -263,6 +306,27 @@ pub fn upsert_rel(
                      VALUES (?1,?2,?3,?4,?5)",
                     params![uuid::Uuid::new_v4().to_string(), id, vault_id, date, s],
                 )?;
+            }
+            // 9. 回填 tasks + events 的 project_id：本笔记 frontmatter.project（项目名）匹配已入库 projects。
+            //    增量场景按名查 projects 表（项目可能在别的笔记，已入库；与 wikilink 增量近似同口径）。
+            if let Some(proj_name) = p.frontmatter.get("project").and_then(|v| v.as_str()) {
+                let pid: Option<String> = tx
+                    .query_row(
+                        "SELECT id FROM projects WHERE vault_id = ?1 AND name = ?2 LIMIT 1",
+                        params![vault_id, proj_name],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                if let Some(pid) = pid {
+                    tx.execute(
+                        "UPDATE tasks SET project_id = ?1 WHERE note_id = ?2 AND vault_id = ?3",
+                        params![pid, id, vault_id],
+                    )?;
+                    tx.execute(
+                        "UPDATE events SET project_id = ?1 WHERE note_id = ?2 AND vault_id = ?3",
+                        params![pid, id, vault_id],
+                    )?;
+                }
             }
             Ok(())
         })
@@ -312,12 +376,13 @@ pub fn remove_rel(db: &Database, vault_id: &str, rel: &str) -> Result<bool, Stri
 mod tests {
     use super::*;
 
-    fn setup() -> (std::path::PathBuf, Database) {
+    fn setup() -> (tempfile::TempDir, std::path::PathBuf, Database) {
+        let tmp = tempfile::TempDir::new().unwrap();
         let vid = uuid::Uuid::new_v4().to_string();
-        let vault_dir = std::env::temp_dir().join(format!("helmose_inc_vault_{}", vid));
+        let vault_dir = tmp.path().join(format!("vault_{}", vid));
         std::fs::create_dir_all(&vault_dir).unwrap();
-        let db_path = std::env::temp_dir().join(format!("helmose_inc_db_{}.db", vid));
-        let db = Database::new(db_path.clone()).unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = Database::new(db_path).unwrap();
         db.init_schema().unwrap();
         db.sqlite()
             .execute(
@@ -326,12 +391,12 @@ mod tests {
                 params![vid, vault_dir.to_string_lossy()],
             )
             .unwrap();
-        (vault_dir, db)
+        (tmp, vault_dir, db)
     }
 
     #[test]
     fn upsert_then_search_then_remove() {
-        let (vault_dir, db) = setup();
+        let (_tmp, vault_dir, db) = setup();
         let vid: String = db
             .sqlite()
             .query_row("SELECT id FROM vaults", &[], |r| r.get::<_, String>(0))
