@@ -45,6 +45,10 @@
     "fs": {
       "requireLiteralLeadingDot": false
     },
-    "opener": {}
+    "opener": {},
+    "updater": {
+      "pubkey": "TODO_REPLACE_AT_RELEASE",
+      "endpoints": ["https://TODO_REPLACE_AT_RELEASE/latest"]
+    }
   }
 }

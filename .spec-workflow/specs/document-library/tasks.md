@@ -53,12 +53,14 @@
   - Purpose: 文档浏览出口（修复"看不到所有文档"）
   - _Leverage: `useVaultStore`、antd 组件、`api`_
   - _Requirements: 1.1, 1.3, 1.4, 2.1–2.4, 3.1, 3.3, 3.4, 4.3_
+  - ⚠️ **现状注记（2026-07-01 补 log 时核对代码发现）**：原 LibraryPage.tsx 三栏设计已被 v0.2 Obsidian-first 重构替代。功能现落点：FilePanel.tsx（左栏目录树）+ NoteView/NotePreview（中栏预览）+ CommandPalette（搜索入口）。详见下文「v0.2 · Obsidian-first 交付」节；task-7 的 Implementation Log 已如实记录此演变。
 
 - [x] 8. 接入菜单与路由
   - File: `frontend/src/App.tsx`
   - 菜单加「文档库」（`FolderOpenOutlined`，置顶）、路由加 `/library`、import `LibraryPage`
   - Purpose: 用户可进入文档库
   - _Leverage: 现有 `menuItems` + `Routes`_
+  - ⚠️ **现状注记（2026-07-01 补 log 时核对代码发现）**：原 App.tsx menuItems + react-router Routes `/library` 已被 v0.2 替代——当前导航改为 Ribbon.tsx 首按钮「文件」（FolderOpenOutlined）toggle FilePanel 显隐，无 react-router 路由。详见下文「v0.2」节；task-8 的 log 已记录此演变。
   - _Requirements: 1.1_
 
 - [x] 9. markdown 预览样式
@@ -87,27 +89,31 @@
 > 本期把文档库从只读预览升级为 Obsidian 式可读写 + 双链 + 搜索 + 实时同步。
 > 客观裁判全绿：`cargo check`（7 warning 均为原有死代码）+ `cargo test`（18 passed）+ `npm run build`（4832 模块）。
 
-## 已交付（10 项）
+## 已交付（10 项 · v0.2 续作）
 
-- [x] 全库搜索（FTS5 trigram，中文短语 + snippet 高亮 + bm25 排序）
+> 编号 11~20 为 2026-07-01 补 log 时回填的 taskId（让 log-implementation 工具能挂载），原 v0.2 节是无编号 checkbox。command-palette 项已在 frontend-componentization spec 记过，不在此补（故编号跳过该项）。
+
+- [x] 11. 全库搜索（FTS5 trigram，中文短语 + snippet 高亮 + bm25 排序）
   - 修复：index_vault 末尾 `INSERT INTO notes_fts(notes_fts) VALUES('rebuild')`——contentless FTS 从未同步的历史问题
-  - Files: `commands/search.rs`、`models/note.rs::SearchResult`、`LibraryPage.tsx` 搜索框
-- [x] wikilink `[[x]]` 双链正向跳转（render_markdown 预处理，跳过 fenced code）
-  - Files: `commands/library.rs::render_wikilinks`、`LibraryPage.tsx::onPreviewClick`
-- [x] 增量索引（notify 文件监听，单文件 upsert/remove + FTS 单行同步）
+  - Files: `commands/search.rs`、`models/note.rs::SearchResult`、`LibraryPage.tsx` 搜索框（v0.2 后落点 `components/CommandPalette.tsx`）
+- [x] 12. wikilink `[[x]]` 双链正向跳转（render_markdown 预处理，跳过 fenced code）
+  - Files: `commands/library.rs::render_wikilinks`、`hooks/useWikilinkNavigation.ts`（原 LibraryPage.onPreviewClick 随 v0.2 重构迁出）
+- [x] 13. 增量索引（notify 文件监听，单文件 upsert/remove + FTS 单行同步）
   - Files: `services/indexer/incremental.rs`、`services/watcher.rs`、`commands/index.rs::start_watcher`
-- [x] 笔记编辑（写回 vault + 自动备份到 `.helmose/backup/` + 增量重索引）
-  - 用户明确授权写 vault；写前备份保护原文。`commands/library.rs::save_note_content`
-- [x] 反向链接面板（links 表反向查询，预览区显示「谁链接了它」）
+- [x] 14. 笔记编辑（写回 vault + 自动备份到 `.helmose/backup/` + 增量重索引）
+  - 用户明确授权写 vault；写前备份保护原文。`commands/library.rs::save_note_content`、`components/NoteEditor.tsx`
+- [x] 15. 反向链接面板（links 表反向查询，预览区显示「谁链接了它」）
   - `commands/library.rs::get_backlinks`、`models/note.rs::Backlink`
 - [x] 命令面板 Ctrl/Cmd+P（复用 FTS 搜索，模糊跳转笔记）
   - `App.tsx::CommandPalette`
-- [x] 标签侧栏（tags 聚合计数，点击复用 FTS 搜 tags 列）
-  - `commands/notes.rs::get_tags_stats`、`LibraryPage.tsx` 左栏
-- [x] 图谱视图（自绘 canvas 力导向，按度数 top 600 截断，点击节点跳转）
+- [x] 16. 标签侧栏（tags 聚合计数，点击复用 FTS 搜 tags 列）
+  - `commands/notes.rs::get_tags_stats`、`LibraryPage.tsx` 左栏（v0.2 后实际落点 `components/SidePanel.tsx`）
+- [x] 17. 图谱视图（自绘 canvas 力导向，按度数 top 1000 截断，点击节点跳转）
   - `commands/library.rs::get_graph_data`、`pages/GraphPage.tsx`、`components/ForceGraph.tsx`
-- [x] 任务页 TasksPage（未完成/已完成 Tab + 按到期分组 + Drawer 看源笔记）—— 保留
-- [x] Agent 状态导出（LIFE-STATE.md + state.json → app_data_dir/agent，不碰 vault）—— 保留
+- [x] 18. 任务页 TasksPage（未完成/已完成 Tab + 按到期分组 + Drawer 看源笔记）
+- [x] 19. Agent 状态导出（LIFE-STATE.md + state.json → app_data_dir/agent，不碰 vault）
+- [x] 20. render_markdown / incremental 逻辑单测（v0.2 已补，覆盖 render_wikilinks/render_markdown/save_note_content/upsert_*/remove_file）
+  - `commands/library.rs:457` + `services/indexer/incremental.rs:247`
 
 ## 未做（用户后置）
 - AI 教练层 v0.2（主线判定/每日建议）—— 需单独 spec

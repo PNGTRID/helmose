@@ -28,10 +28,6 @@ impl SqliteDatabase {
         })
     }
 
-    pub fn connection(&self) -> &Arc<Mutex<Connection>> {
-        &self.connection
-    }
-
     /// 执行查询并返回多行
     pub fn query_map<T, F>(
         &self,

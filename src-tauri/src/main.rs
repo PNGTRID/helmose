@@ -21,6 +21,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             utils::logging::init();
 
@@ -45,6 +46,7 @@ pub fn run() {
             commands::vault::list_vaults,
             commands::vault::get_default_vault,
             commands::vault::delete_vault,
+            commands::vault::reset_app,
             // 索引
             commands::index::index_vault,
             // 笔记
@@ -55,14 +57,27 @@ pub fn run() {
             commands::library::list_dirs,
             commands::library::list_notes_meta,
             commands::library::list_all_notes_meta,
+            commands::library::list_notes_by_tag,
             commands::library::get_note_content,
             commands::library::save_note_content,
+            commands::library::toggle_task,
+            commands::library::delete_note,
+            commands::library::create_note,
+            commands::library::create_today_note,
             commands::library::get_backlinks,
+            commands::library::get_forward_links,
+            commands::library::list_backups,
+            commands::library::delete_backup,
+            commands::library::list_trash,
+            commands::library::clear_trash,
+            commands::library::get_tomorrow_sentence,
             commands::library::get_graph_data,
             // 任务
             commands::tasks::get_tasks,
             // 项目
             commands::projects::get_projects,
+            // 事件（日历用）
+            commands::events::list_events,
             // 脚手架（新建知识库骨架）
             commands::scaffold::scaffold_vault,
             // 全库搜索（FTS5）
@@ -73,6 +88,8 @@ pub fn run() {
             commands::index::start_watcher,
             // 启动时检测是否需要重新索引
             commands::index::should_reindex,
+            // 自动更新检查（占位 endpoint，发布时配真实值）
+            commands::update::check_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running helmose");

@@ -117,11 +117,23 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
         ..Default::default()
     };
 
-    // 3. 事务写入
+    // 3. 收集 projects（本地字段）+ 跑全局 pass（last_activity / 兜底 priority / top-3 mainline）。
+    //    全局 pass 需全集（多 project 互比），必须在写库前算完。
+    let mut project_records: Vec<(String, indexer::projects::ProjectInfo)> = Vec::new();
+    for (id, p) in &with_id {
+        if let Some(info) = indexer::projects::extract(p) {
+            project_records.push((id.clone(), info));
+        }
+    }
+    indexer::projects::apply_global_passes(&mut project_records, &parsed);
+
+    // 4. 事务写入
     db.sqlite()
         .transaction(|tx| {
             tx.execute("DELETE FROM tasks WHERE vault_id = ?1", params![vault_id])?;
             tx.execute("DELETE FROM links WHERE vault_id = ?1", params![vault_id])?;
+            tx.execute("DELETE FROM events WHERE vault_id = ?1", params![vault_id])?;
+            tx.execute("DELETE FROM tomorrow_sentences WHERE vault_id = ?1", params![vault_id])?;
             tx.execute("DELETE FROM projects WHERE vault_id = ?1", params![vault_id])?;
             tx.execute("DELETE FROM notes WHERE vault_id = ?1", params![vault_id])?;
 
@@ -160,14 +172,15 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                     let tid = uuid::Uuid::new_v4().to_string();
                     let created = crate::utils::dates::now_iso8601();
                     tx.execute(
-                        "INSERT INTO tasks (id,note_id,vault_id,text,done,source,source_line,created_at) \
-                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                        "INSERT INTO tasks (id,note_id,vault_id,text,done,due_date,source,source_line,created_at) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                         params![
                             tid,
                             id,
                             vault_id,
                             t.text,
                             if t.done { 1 } else { 0 },
+                            t.due_date,
                             t.source,
                             t.source_line,
                             created
@@ -200,22 +213,70 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                 }
             }
 
-            // 第三遍：projects（frontmatter type=project 的笔记 → projects 表）
+            // 第三遍：projects（全局 pass 后的 records → projects 表全字段）
+            for (id, info) in &project_records {
+                tx.execute(
+                    "INSERT INTO projects \
+                     (id,vault_id,note_id,name,status,priority,is_mainline,okr_priority,home_rel_path,last_activity) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                    params![
+                        uuid::Uuid::new_v4().to_string(),
+                        vault_id,
+                        id,
+                        info.name,
+                        info.status,
+                        info.priority,
+                        if info.is_mainline { 1 } else { 0 },
+                        info.okr_priority,
+                        info.home_rel_path,
+                        info.last_activity,
+                    ],
+                )?;
+            }
+            // 项目数已含在 notes 统计里，不另计 IndexStats。
+
+            // 第四遍：events（笔记「关键事件」等 section 的 bullet → events 表）
             for (id, p) in &with_id {
-                if let Some(pi) = indexer::projects::extract(p) {
+                for ev in &p.events {
                     tx.execute(
-                        "INSERT INTO projects (id,vault_id,note_id,name,status,is_mainline,home_rel_path) \
-                         VALUES (?1,?2,?3,?4,?5,0,?6)",
+                        "INSERT INTO events \
+                         (id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
                         params![
                             uuid::Uuid::new_v4().to_string(),
-                            vault_id,
                             id,
-                            pi.name,
-                            pi.status,
-                            pi.home_rel_path
+                            vault_id,
+                            ev.title,
+                            ev.event_time,
+                            ev.event_date,
+                            ev.content,
+                            ev.output,
+                            // project_id 暂不关联（M1 未做 event→project 映射，留 backlog）
+                            None::<String>,
+                            ev.raw_bullet,
                         ],
                     )?;
-                    stats.notes; // 项目数已含在 notes 统计里，不另计
+                }
+            }
+
+            // 第五遍：tomorrow_sentences（日志「明日一句」section 的一句话，需 date_iso）
+            tx.execute(
+                "DELETE FROM tomorrow_sentences WHERE vault_id = ?1",
+                params![vault_id],
+            )?;
+            for (id, p) in &with_id {
+                if let (Some(date), Some(s)) = (&p.date_iso, &p.tomorrow_sentence) {
+                    tx.execute(
+                        "INSERT INTO tomorrow_sentences (id,note_id,vault_id,date_iso,sentence) \
+                         VALUES (?1,?2,?3,?4,?5)",
+                        params![
+                            uuid::Uuid::new_v4().to_string(),
+                            id,
+                            vault_id,
+                            date,
+                            s
+                        ],
+                    )?;
                 }
             }
 
@@ -563,5 +624,181 @@ mod tests {
             id_b_after, hash_b,
             "碰撞解除后 b.md id 应回纯 content_hash（已知边缘漂移）"
         );
+    }
+
+    /// M1：projects 全字段写库（priority / is_mainline / okr_priority / last_activity）。
+    /// 种 2 个 project：A 明确 fm priority+mainline+okr，放自己子目录（验 last_activity 扫描）；
+    /// B 无 priority/mainline（验兜底 150 + top-3 补主线）。
+    #[test]
+    fn index_vault_inner_projects_full_fields() {
+        let (vid, vault_dir, db) = setup();
+        // A：明确 priority=90 + mainline:true + okr:P0，放自己子目录（父目录非顶层 → 扫描 last_activity）
+        std::fs::create_dir_all(vault_dir.join("01_企业与项目资产/项目A")).unwrap();
+        std::fs::write(
+            vault_dir.join("01_企业与项目资产/项目A/项目A.md"),
+            "---\ntitle: 项目A\ntype: project\npriority: 90\nmainline: true\nokr: P0\ntags: [project-status:active]\n---\n# 项目A\n",
+        )
+        .unwrap();
+        // A 子目录下一篇普通笔记（供 last_activity 同目录扫描）
+        std::fs::write(
+            vault_dir.join("01_企业与项目资产/项目A/子笔记.md"),
+            "# 子笔记\n一些内容\n",
+        )
+        .unwrap();
+        // B：无 priority/mainline/okr（验兜底 + top-3）；放顶层目录下（父目录是顶层 → last_activity 退化）
+        std::fs::write(
+            vault_dir.join("01_企业与项目资产/项目B.md"),
+            "---\ntitle: 项目B\ntype: project\ntags: [project-status:active]\n---\n# 项目B\n",
+        )
+        .unwrap();
+
+        index_vault_inner(&vid, &db).expect("index 应成功");
+        let sqlite = db.sqlite();
+
+        // A：priority=90 / is_mainline=1 / okr=P0 / last_activity 非空
+        let a: (Option<f64>, i64, Option<String>, Option<String>) = sqlite
+            .query_row(
+                "SELECT priority, is_mainline, okr_priority, last_activity FROM projects WHERE name = '项目A'",
+                &[],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+            .expect("应有 项目A");
+        assert_eq!(a.0, Some(90.0), "A priority 应为 fm 值 90");
+        assert_eq!(a.1, 1, "A fm.mainline=true → is_mainline=1");
+        assert_eq!(a.2.as_deref(), Some("P0"), "A okr 应为 P0");
+        assert!(a.3.is_some(), "A last_activity 应非空（ISO8601）");
+
+        // B：priority 兜底（None 中 rank0 → 150），is_mainline 经 top-3 补 → 1
+        let b: (Option<f64>, i64, Option<String>) = sqlite
+            .query_row(
+                "SELECT priority, is_mainline, last_activity FROM projects WHERE name = '项目B'",
+                &[],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+            .expect("应有 项目B");
+        assert_eq!(b.0, Some(150.0), "B 兜底 priority rank0 → 150");
+        assert_eq!(b.1, 1, "B active 且进 top-3 → is_mainline=1");
+        assert!(b.2.is_some(), "B last_activity 退化用自身 mtime，应非空");
+    }
+
+    /// M2：events 表写库（从 experience 笔记的「关键事件」section 提取 bullet）。
+    #[test]
+    fn index_vault_inner_events_extracted() {
+        let (vid, vault_dir, db) = setup();
+        std::fs::create_dir_all(vault_dir.join("05_个人成长与认知资产/经历/2026-04")).unwrap();
+        std::fs::write(
+            vault_dir.join("05_个人成长与认知资产/经历/2026-04/2026-04-01.md"),
+            "---\ntitle: 2026-04-01 经历\ntype: experience\ncreated: 2026-04-01\n---\n# 概述\n\n## 关键事件\n- **早会**: 9:00 和团队对齐\n- 写了设计文档\n\n## 明日待办\n- 跟进 A\n",
+        )
+        .unwrap();
+
+        index_vault_inner(&vid, &db).expect("index 应成功");
+        let sqlite = db.sqlite();
+
+        // events 表应有 2 行（关键事件 section 下 2 个 bullet；明日待办不算事件）
+        let cnt: i64 = sqlite
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE vault_id = ?1",
+                params![vid],
+                |r| r.get(0),
+            )
+            .unwrap()
+            .unwrap_or(0);
+        assert_eq!(cnt, 2, "应提取 2 条事件，实际 {}", cnt);
+
+        // event_date = 笔记 date_iso（2026-04-01）
+        let dates: Vec<Option<String>> = sqlite
+            .query_map(
+                "SELECT DISTINCT event_date FROM events WHERE vault_id = ?1",
+                params![vid],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap();
+        assert!(
+            dates.iter().all(|d| d.as_deref() == Some("2026-04-01")),
+            "event_date 应为 2026-04-01，实际 {:?}",
+            dates
+        );
+
+        // 第一条应解析出时间 9:00
+        let t: Option<String> = sqlite
+            .query_row(
+                "SELECT event_time FROM events WHERE vault_id = ?1 AND event_time IS NOT NULL LIMIT 1",
+                params![vid],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+            .flatten();
+        assert_eq!(t.as_deref(), Some("9:00"), "应解析出事件时间 9:00");
+    }
+
+    /// 真实 wiki 全链路 smoke：注册 ~/wiki → 全量索引（派生 SQLite，不写 vault md）→
+    /// 统计 projects/events/tasks.due_date 填充情况，验证 M1/M2/M8 对真实 1.9 万文件的端到端效果。
+    /// #[ignore]：依赖本机 ~/wiki（CI 无），`cargo test -- --ignored index_real_wiki_full_pipeline` 显式跑。
+    #[test]
+    #[ignore]
+    fn index_real_wiki_full_pipeline() {
+        let root = std::env::var("HELMOSE_TEST_VAULT")
+            .unwrap_or_else(|_| "/Users/yuanruiqin/wiki".into());
+        if !Path::new(&root).exists() {
+            eprintln!("[smoke-full] skip: {} 不存在", root);
+            return;
+        }
+        let vid = uuid::Uuid::new_v4().to_string();
+        let tag = format!("{}_{}", std::process::id(), vid);
+        let db_path = std::env::temp_dir().join(format!("helmose_realwiki_db_{}.db", tag));
+        let db = Database::new(db_path).unwrap();
+        db.init_schema().unwrap();
+        db.sqlite()
+            .execute(
+                "INSERT INTO vaults (id,name,root_path,created_at,indexing_state,is_obsidian_shared,exclude_patterns) \
+                 VALUES (?1,'real',?2,'2026-01-01T00:00:00Z','idle',0,'[]')",
+                params![vid, root],
+            )
+            .unwrap();
+
+        let stats = index_vault_inner(&vid, &db).expect("全量索引应成功");
+        let sqlite = db.sqlite();
+
+        let projects: i64 = sqlite
+            .query_row("SELECT COUNT(*) FROM projects WHERE vault_id=?1", params![vid], |r| r.get(0))
+            .unwrap().unwrap_or(0);
+        let mainline: i64 = sqlite
+            .query_row("SELECT COUNT(*) FROM projects WHERE vault_id=?1 AND is_mainline=1", params![vid], |r| r.get(0))
+            .unwrap().unwrap_or(0);
+        let proj_with_priority: i64 = sqlite
+            .query_row("SELECT COUNT(*) FROM projects WHERE vault_id=?1 AND priority IS NOT NULL", params![vid], |r| r.get(0))
+            .unwrap().unwrap_or(0);
+        let proj_with_activity: i64 = sqlite
+            .query_row("SELECT COUNT(*) FROM projects WHERE vault_id=?1 AND last_activity IS NOT NULL", params![vid], |r| r.get(0))
+            .unwrap().unwrap_or(0);
+        let events: i64 = sqlite
+            .query_row("SELECT COUNT(*) FROM events WHERE vault_id=?1", params![vid], |r| r.get(0))
+            .unwrap().unwrap_or(0);
+        let tasks_due: i64 = sqlite
+            .query_row("SELECT COUNT(*) FROM tasks WHERE vault_id=?1 AND due_date IS NOT NULL", params![vid], |r| r.get(0))
+            .unwrap().unwrap_or(0);
+        let log_notes: i64 = sqlite
+            .query_row("SELECT COUNT(*) FROM notes WHERE vault_id=?1 AND note_type='log'", params![vid], |r| r.get(0))
+            .unwrap().unwrap_or(0);
+        let tomorrow: i64 = sqlite
+            .query_row("SELECT COUNT(*) FROM tomorrow_sentences WHERE vault_id=?1", params![vid], |r| r.get(0))
+            .unwrap().unwrap_or(0);
+
+        eprintln!(
+            "[smoke-full] 真实 wiki 全链路：notes={} tasks={} wikilinks={} | projects={} (主线={} 有priority={} 有activity={}) | events={} | tasks_with_due={} | log_notes={} | tomorrow_sentences={}",
+            stats.notes, stats.tasks, stats.wikilinks,
+            projects, mainline, proj_with_priority, proj_with_activity,
+            events, tasks_due, log_notes, tomorrow
+        );
+
+        // 所有 project 都应有 priority + last_activity（M1 全字段填充）
+        assert!(projects == 0 || proj_with_priority == projects, "所有 project 应有 priority（兜底或 fm），缺: {}", projects - proj_with_priority);
+        assert!(projects == 0 || proj_with_activity == projects, "所有 project 应有 last_activity");
+        assert!(stats.notes > 100, "真 wiki 应 >100 笔记，实际 {}", stats.notes);
+
+        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("helmose_realwiki_db_{}.db", tag)));
     }
 }

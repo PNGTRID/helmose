@@ -83,12 +83,27 @@ vault 规模约 **1.9 万 md 文件**。以下规则必须遵守：
 - 脚手架 `scaffold_vault`（新建 Life OS 目录骨架）。
 - 笔记编辑写回 `save_note_content`（写前备份到 `.helmose/backup`）。
 - 关系图谱 / 反向链接（`get_graph_data` / `get_backlinks`）。
+- **wikilink `[[x]]` 可点跳转**（后端 `render_wikilinks` 渲染为 `<a class="helmose-wikilink" data-target>` + 前端 `useWikilinkNavigation` 点击全库搜跳转 + CSS 紫色双下划线，已含测试）。
+- **projects 深度结构化**（`get_projects` 返回 priority/is_mainline/含 top-3 兜底/okr_priority/last_activity 全字段；indexer 两层提取）。
+- **events 解析**（从笔记「关键事件/时间线」section 提取 bullet 填 events 表 + `list_events` 命令；日历/今日页消费）。
+- **tasks due_date 解析**（bullet 内 `📅` / `due:` / `截止:` / `deadline` 标记 → due_date 列；TasksPage 分组 + TodayPage 今日待办按此筛）。
+- **创建笔记 `create_note`**（用户按钮触发写 vault + 增量索引 + 路径防穿越 + 不覆盖；TodayPage「今日笔记」动线）。
+- **前向链接 `get_forward_links`**（SidePanel 双向链接完整：反链 + 前向）。
+- **标签精确筛选 `list_notes_by_tag`**（tags JSON 数组精确匹配，替代 FTS 全文搜的宽泛）。
+- **暗色模式**（`stores/theme.ts` + antd `darkAlgorithm` + CSS `html.dark` 变量 + StatusBar 切换 + localStorage 持久化）。
+- **ErrorBoundary**（content 区错误捕获，单页崩不白屏 + 重试/重载）。
+- **FilePanel 虚拟列表**（antd Tree `virtual` + ResizeObserver 测高，1.9 万节点只渲染可见行）。
+- **自动更新框架**（`tauri-plugin-updater` + `check_update` 命令 + SettingsPage 按钮；pubkey/endpoints 占位 `TODO_REPLACE_AT_RELEASE`，发布时配真实值）。
+- **重置安装 `reset_app`**（DROP 派生表 + 清 agent 缓存 + 移除 vault 注册，回 Onboarding；绝不碰 vault 原文）。
 
 🚧 **待办**：
 
-- wikilink `[[x]]` 可点跳转（当前预览按字面文本显示）。
 - AI 教练层（v0.2）：主线判定、每日建议、明日一句。
 - Agent inbox 写回（状态导出已做，写回未做）。
+- 真实 updater endpoint/pubkey（M5 占位，发布时配）。
+- events 的 `project_id` 关联（event→project 映射未做）。
+- 前向链接的 dangling 提示（当前只显示已解析的）。
+- bundle 拆分（manualChunks 拆 vendor，当前 1.78MB 桌面应用本地加载可接受）。
 
 ## 工作区状态
 

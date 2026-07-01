@@ -7,7 +7,7 @@
 use crate::models::ScaffoldStats;
 use crate::services::contract;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 目录是否已是 vault：含 00~09 任一顶层目录 或 含任意顶层 .md 文件
 fn looks_like_vault(path: &Path) -> bool {
@@ -132,6 +132,7 @@ pub fn scaffold_vault(target_path: String) -> Result<ScaffoldStats, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// 构造唯一的临时目录（用进程 id + 唯一名，不依赖外部 crate）
     fn tmp(unique: &str) -> PathBuf {
@@ -147,7 +148,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let stats = scaffold_inner(root.to_string_lossy().as_ref()).unwrap();
         assert_eq!(stats.dirs_created, 10);
-        assert_eq!(stats.templates_created, 11);
+        assert_eq!(stats.templates_created, 12);
         assert_eq!(stats.root_files_created, 3);
         for dir in contract::TOP_LEVEL_DIRS {
             assert!(root.join(dir).is_dir(), "缺目录 {}", dir);
@@ -164,7 +165,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(tmpl, 11);
+        assert_eq!(tmpl, 12);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -207,7 +208,7 @@ mod tests {
 
         let root = tmp("pipeline");
         let stats = scaffold_inner(root.to_string_lossy().as_ref()).unwrap();
-        assert_eq!(stats.templates_created, 11);
+        assert_eq!(stats.templates_created, 12);
 
         // 临时 DB + 注册 vault + 全量索引
         let db_path = std::env::temp_dir().join(format!(
@@ -229,8 +230,8 @@ mod tests {
         .unwrap();
 
         let idx_stats = index_vault_inner(&v.id, &db).unwrap();
-        // 11 个 type 模板 + 规范.md / 目录.md / README.md = 14 个 md
-        assert_eq!(idx_stats.notes, 14, "骨架 14 个 md 应全部入库");
+        // 12 个 type 模板 + 规范.md / 目录.md / README.md = 15 个 md
+        assert_eq!(idx_stats.notes, 15, "骨架 15 个 md 应全部入库");
 
         // project-模板.md 的 frontmatter type=project → projects 表命中
         let projects: i64 = db

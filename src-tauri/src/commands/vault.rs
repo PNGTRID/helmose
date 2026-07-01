@@ -5,7 +5,7 @@ use crate::services::Database;
 use crate::utils::dates;
 use rusqlite::params;
 use std::fs;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 fn default_excludes() -> Vec<String> {
     vec![
@@ -146,6 +146,43 @@ pub fn delete_vault(vault_id: String, db: State<'_, Database>) -> Result<(), Str
     delete_vault_inner(&vault_id, db.inner())
 }
 
+/// 重置 Helmose 派生数据核心逻辑（可被集成测试直接调用，绕过 app handle）。
+/// DROP 所有派生表（含 vaults 移除注册）→ 重建空 schema。绝不碰 vault 原文。
+pub fn reset_db_inner(db: &Database) -> Result<(), String> {
+    // 顺序：先 FTS（外部内容表），再业务表；DROP 不受 FK DDL 约束影响，顺序仅稳妥起见。
+    for stmt in [
+        "DROP TABLE IF EXISTS notes_fts",
+        "DROP TABLE IF EXISTS life_state_snapshots",
+        "DROP TABLE IF EXISTS tomorrow_sentences",
+        "DROP TABLE IF EXISTS links",
+        "DROP TABLE IF EXISTS entities",
+        "DROP TABLE IF EXISTS okrs",
+        "DROP TABLE IF EXISTS events",
+        "DROP TABLE IF EXISTS projects",
+        "DROP TABLE IF EXISTS tasks",
+        "DROP TABLE IF EXISTS notes",
+        "DROP TABLE IF EXISTS vaults",
+    ] {
+        db.sqlite().execute(stmt, &[]).map_err(|e| e.to_string())?;
+    }
+    // 重建空 schema（CREATE TABLE IF NOT EXISTS，幂等）
+    db.init_schema().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 重置 Helmose：清 SQLite（DROP 全表 + 重建空 schema，移除 vault 注册）+ 清 app_data_dir/agent 派生导出。
+/// 绝不碰 vault 原文（铁律 1）。重置后前端 reload → getDefaultVault 返回 None → 回 Onboarding。
+#[tauri::command]
+pub fn reset_app(app: AppHandle, db: State<'_, Database>) -> Result<(), String> {
+    reset_db_inner(db.inner())?;
+    // 清 Agent 导出缓存（app_data_dir/agent），目录可能不存在 → 失败不致命
+    if let Ok(app_data) = app.path().app_data_dir() {
+        let agent_dir = app_data.join("agent");
+        let _ = fs::remove_dir_all(&agent_dir);
+    }
+    Ok(())
+}
+
 // ============================================================
 // 集成测试：add_vault → list_vaults → delete_vault 往返 + 级联清理
 // 真 SQLite + 真临时 FS；pid+uuid 隔离，不依赖 ~/wiki
@@ -223,6 +260,57 @@ mod tests {
 
         let list2 = list_vaults_inner(&db).unwrap();
         assert!(!list2.iter().any(|x| x.id == vid), "vault 应已删除");
+
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    /// reset_db_inner：DROP 全表 + 重建空 schema，移除 vault 注册，且 schema 仍可用（能再注册+索引）。
+    #[test]
+    fn reset_db_inner_clears_and_reinits() {
+        let db = setup_db();
+        let vault_dir = std::env::temp_dir().join(format!(
+            "helmose_reset_dir_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        std::fs::write(vault_dir.join("a.md"), "# A\n- [ ] t\n").unwrap();
+
+        // 注册 + 索引（产生 notes/tasks 等派生数据）
+        let v = add_vault_inner(
+            VaultInput {
+                name: "t".into(),
+                root_path: vault_dir.to_string_lossy().to_string(),
+                is_obsidian_shared: false,
+            },
+            &db,
+        )
+        .unwrap();
+        index_vault_inner(&v.id, &db).unwrap();
+        assert!(get_default_vault_inner(&db).unwrap().is_some(), "reset 前应有 vault");
+
+        // reset
+        reset_db_inner(&db).unwrap();
+
+        // vaults 应空（注册移除）
+        assert!(
+            get_default_vault_inner(&db).unwrap().is_none(),
+            "reset 后应无 vault"
+        );
+
+        // schema 仍有效：能再注册 + 索引（全表可用）
+        let v2 = add_vault_inner(
+            VaultInput {
+                name: "t2".into(),
+                root_path: vault_dir.to_string_lossy().to_string(),
+                is_obsidian_shared: false,
+            },
+            &db,
+        )
+        .unwrap();
+        index_vault_inner(&v2.id, &db).unwrap();
+        assert_eq!(v2.name, "t2");
+        assert!(get_default_vault_inner(&db).unwrap().is_some(), "reset 后能再注册");
 
         let _ = std::fs::remove_dir_all(&vault_dir);
     }
