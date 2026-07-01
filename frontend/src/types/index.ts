@@ -146,10 +146,40 @@ export interface Project {
   last_activity: string | null;
 }
 
+/** 事件（笔记「关键事件 / 时间线」section 的 bullet） */
+export interface Event {
+  id: string;
+  note_id: string;
+  vault_id: string;
+  title: string | null;
+  /** HH:MM 或 HH:MM-HH:MM */
+  event_time: string | null;
+  /** YYYY-MM-DD（来自笔记 date_iso） */
+  event_date: string | null;
+  content: string | null;
+  output: string | null;
+  project_id: string | null;
+  raw_bullet: string | null;
+}
+
 /** 脚手架生成统计（onboarding「创建知识库」） */
 export interface ScaffoldStats {
   root_path: string;
   dirs_created: number;
   templates_created: number;
   root_files_created: number;
+}
+
+/** 更新检查结果（check_update 命令） */
+export interface UpdateStatus {
+  available: boolean;
+  version: string | null;
+  message: string;
+}
+
+/** 备份文件信息（.helmose/backup/ 下） */
+export interface BackupInfo {
+  name: string;
+  size: number;
+  mtime: string;
 }

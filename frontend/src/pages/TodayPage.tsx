@@ -1,105 +1,329 @@
+// 今日聚焦（教练面板）：聚合「今日待办 / 今日事件 / 主线项目 / 索引统计」四张卡片。
+// 数据源：tasks(undone) + events(today) + projects(is_mainline) + stats(已有)。
+// 今日待办 = 未完成 task 且其源笔记 date_iso == 今天（绕开 due_date 未填的坑，用「今日笔记的待办」语义）。
+// 每卡片点击跳对应页（openView）；主线项目卡片内项目可点开笔记。
+// 竞态：useEffect 用 cancelled flag 守卫；watcherTick/stats 变化驱动刷新。
+
 import { useEffect, useState } from "react";
 import {
+  Alert,
   Button,
   Card,
   Col,
+  Empty,
   List,
+  message,
   Row,
   Space,
   Statistic,
   Tag,
   Typography,
 } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import {
+  CalendarOutlined,
+  CheckSquareOutlined,
+  CompassOutlined,
+  FileAddOutlined,
+  ReloadOutlined,
+} from "@ant-design/icons";
+import dayjs from "dayjs";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
-import type { Task } from "../types";
+import { useTabsStore } from "../stores/tabs";
+import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
+import { dateKey } from "../utils/date";
+import { openNoteFromMeta, openOrCreateTodayNote } from "../utils/note";
+import type { Event, Project, Task } from "../types";
 
 const { Text } = Typography;
 
-/** 今日聚焦（教练面板）—— v0.1 显示索引统计 + 待办任务；主线判定/教练建议 v0.2 接 AI */
+/** 今日聚焦（教练面板）—— v0.1 聚合四源信号；主线判定/教练建议 v0.2 接 AI */
 export default function TodayPage() {
   const { vault, indexing, stats, index } = useVaultStore();
+  const watcherTick = useVaultStore((s) => s.watcherTick);
+  const { notes } = useAllNotesMeta();
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [loadingTasks, setLoadingTasks] = useState(false);
+  const [events, setEvents] = useState<Event[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [yesterdaySentence, setYesterdaySentence] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const refreshTasks = async () => {
+  const today = dayjs().format("YYYY-MM-DD");
+
+  const refresh = async () => {
     if (!vault) return;
-    setLoadingTasks(true);
+    setLoading(true);
     try {
-      setTasks(await api.getTasks(vault.id, false, 30));
+      const yesterday = dayjs().subtract(1, "day").format("YYYY-MM-DD");
+      const [t, e, p, ys] = await Promise.all([
+        api.getTasks(vault.id, false, 200),
+        api.listEvents(vault.id, today, today),
+        api.getProjects(vault.id, undefined, true),
+        api.getTomorrowSentence(vault.id, yesterday),
+      ]);
+      setTasks(t);
+      setEvents(e);
+      setProjects(p);
+      setYesterdaySentence(ys);
     } catch {
       setTasks([]);
+      setEvents([]);
+      setProjects([]);
+      setYesterdaySentence(null);
     } finally {
-      setLoadingTasks(false);
+      setLoading(false);
     }
   };
 
+  // cancelled flag：vault 切换/卸载时丢弃旧响应（竞态守卫）
   useEffect(() => {
-    refreshTasks();
+    let cancelled = false;
+    if (!vault) return;
+    (async () => {
+      await refresh();
+      if (cancelled) return;
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vault?.id, stats]);
+  }, [vault?.id, stats, watcherTick]);
 
   if (!vault) return null;
 
+  // 今日笔记 id 集（用于筛「今日待办」）
+  const todayNoteIds = new Set(
+    notes.filter((n) => dateKey(n.date_iso) === today).map((n) => n.id)
+  );
+  // 今日待办：due_date==今天，或来自今日笔记的未完成 task（两路并集，due_date 现已由索引器解析）
+  const todayTasks = tasks.filter(
+    (t) => t.due_date === today || todayNoteIds.has(t.note_id)
+  );
+  // 逾期未完成（due_date < 今天）：醒目提醒，跳任务页处理
+  const overdueTasks = tasks.filter((t) => t.due_date && t.due_date < today);
+
+  const goTo = (type: "tasks" | "calendar" | "projects", title: string) =>
+    useTabsStore.getState().openView(type, title);
+
+  // 打开或创建今日笔记（util 封装后端 create_today_note，TodayPage/命令面板/Ctrl+J 共用）。
+  const openOrCreateToday = async () => {
+    try {
+      await openOrCreateTodayNote();
+      message.success("已打开/创建今日笔记");
+    } catch (e) {
+      message.error(`操作失败：${e}`);
+    }
+  };
+
+  const hasFocus =
+    todayTasks.length > 0 || events.length > 0 || projects.length > 0;
+
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Card>
-        <Row gutter={16}>
-          <Col span={6}>
-            <Statistic title="已索引笔记" value={stats?.notes ?? "—"} />
-          </Col>
-          <Col span={6}>
-            <Statistic title="任务总数" value={stats?.tasks ?? "—"} />
-          </Col>
-          <Col span={6}>
-            <Statistic title="wikilink" value={stats?.wikilinks ?? "—"} />
-          </Col>
-          <Col span={6}>
-            <Statistic
-              title="索引耗时"
-              value={stats?.elapsed_ms ?? "—"}
-              suffix="ms"
-            />
-          </Col>
-        </Row>
+      <Row gutter={16}>
+        <Col span={6}>
+          <Statistic title="已索引笔记" value={stats?.notes ?? "—"} />
+        </Col>
+        <Col span={6}>
+          <Statistic title="任务总数" value={stats?.tasks ?? "—"} />
+        </Col>
+        <Col span={6}>
+          <Statistic title="wikilink" value={stats?.wikilinks ?? "—"} />
+        </Col>
+        <Col span={6}>
+          <Statistic title="索引耗时" value={stats?.elapsed_ms ?? "—"} suffix="ms" />
+        </Col>
+      </Row>
+      <Space>
         <Button
           type="primary"
+          icon={<FileAddOutlined />}
+          onClick={openOrCreateToday}
+        >
+          今日笔记
+        </Button>
+        <Button
           icon={<ReloadOutlined />}
           loading={indexing}
-          onClick={() => index().then(refreshTasks)}
-          style={{ marginTop: 16 }}
+          onClick={() => index().then(refresh)}
         >
           重新索引
         </Button>
-      </Card>
+      </Space>
 
-      <Card title="⚓ 今日聚焦">
-        <Text type="secondary">
-          主线判定与教练建议将在 v0.2 接入 AI。当前主线信号源：
-          袁锐钦.md「当前主攻」+ Q2-OKR P0/P1 + 业务线 project-status。
-        </Text>
-      </Card>
-
-      <Card title="待办任务（未完成，前 30）" loading={loadingTasks}>
-        <List
-          dataSource={tasks}
-          locale={{ emptyText: "暂无任务——试试重新索引，或检查日志里的「明日待办」section" }}
-          renderItem={(t) => (
-            <List.Item>
-              <List.Item.Meta
-                title={<span>{t.text}</span>}
-                description={
-                  <Space size={4} wrap>
-                    <Tag color="blue">{t.source}</Tag>
-                    {t.source_line && <Text type="secondary" style={{ fontSize: 12 }}>L{t.source_line}</Text>}
-                  </Space>
-                }
-              />
-            </List.Item>
-          )}
+      {overdueTasks.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ cursor: "pointer" }}
+          message={`有 ${overdueTasks.length} 个逾期任务`}
+          description={
+            <span>
+              {overdueTasks.slice(0, 3).map((t) => t.text).join(" · ")}
+              {overdueTasks.length > 3 ? " …" : ""}
+              <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                点击查看全部
+              </Typography.Text>
+            </span>
+          }
+          onClick={() => goTo("tasks", "任务")}
         />
-      </Card>
+      )}
+
+      {yesterdaySentence && (
+        <Card>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            ⚓ 昨日定下的今日寄语
+          </Typography.Text>
+          <div style={{ fontSize: 18, marginTop: 4 }}>{yesterdaySentence}</div>
+        </Card>
+      )}
+
+      {!hasFocus && !loading && (
+        <Card>
+          <Empty
+            description={
+              <span>
+                今天还没有聚焦信号——试着在今日日志里写「今日待办 / 关键事件」，
+                或给重要项目加 <Text code>mainline: true</Text>，重新索引后这里会汇总。
+              </span>
+            }
+          />
+        </Card>
+      )}
+
+      <Row gutter={[16, 16]}>
+        {/* 今日待办 */}
+        <Col span={12}>
+          <Card
+            title={
+              <Space>
+                <CheckSquareOutlined />
+                <span>今日待办</span>
+                <Tag color="blue" style={{ margin: 0 }}>{todayTasks.length}</Tag>
+              </Space>
+            }
+            hoverable
+            loading={loading}
+            onClick={() => goTo("tasks", "任务")}
+            style={{ height: "100%" }}
+          >
+            {todayTasks.length === 0 ? (
+              <Text type="secondary">今日笔记无未完成待办</Text>
+            ) : (
+              <List
+                size="small"
+                dataSource={todayTasks.slice(0, 5)}
+                renderItem={(t) => (
+                  <List.Item>
+                    <Text ellipsis style={{ maxWidth: "100%" }}>{t.text}</Text>
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
+        </Col>
+
+        {/* 今日事件 */}
+        <Col span={12}>
+          <Card
+            title={
+              <Space>
+                <CalendarOutlined />
+                <span>今日事件</span>
+                <Tag color="green" style={{ margin: 0 }}>{events.length}</Tag>
+              </Space>
+            }
+            hoverable
+            loading={loading}
+            onClick={() => goTo("calendar", "日历")}
+            style={{ height: "100%" }}
+          >
+            {events.length === 0 ? (
+              <Text type="secondary">今日无事件（需笔记「关键事件」section）</Text>
+            ) : (
+              <List
+                size="small"
+                dataSource={events.slice(0, 5)}
+                renderItem={(ev) => (
+                  <List.Item>
+                    <Space>
+                      {ev.event_time && <Text type="secondary">{ev.event_time}</Text>}
+                      <Text ellipsis style={{ maxWidth: 220 }}>
+                        {ev.title ?? ev.raw_bullet ?? "（未命名事件）"}
+                      </Text>
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
+        </Col>
+
+        {/* 主线项目 */}
+        <Col span={12}>
+          <Card
+            title={
+              <Space>
+                <CompassOutlined />
+                <span>主线项目</span>
+                <Tag color="purple" style={{ margin: 0 }}>{projects.length}</Tag>
+              </Space>
+            }
+            hoverable
+            loading={loading}
+            onClick={() => goTo("projects", "项目")}
+            style={{ height: "100%" }}
+          >
+            {projects.length === 0 ? (
+              <Text type="secondary">
+                暂无主线项目（frontmatter <Text code>mainline: true</Text> 或 active top-3）
+              </Text>
+            ) : (
+              <List
+                size="small"
+                dataSource={projects.slice(0, 5)}
+                renderItem={(p) => (
+                  <List.Item
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openNoteFromMeta({
+                        id: p.note_id,
+                        title: p.name,
+                        file_name: p.name,
+                        rel_path: p.home_rel_path ?? "",
+                      });
+                    }}
+                  >
+                    <Space>
+                      <Text strong>{p.name}</Text>
+                      {p.okr_priority && <Tag style={{ margin: 0 }}>{p.okr_priority}</Tag>}
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
+        </Col>
+
+        {/* 索引统计（快捷入口） */}
+        <Col span={12}>
+          <Card title={<Space><ReloadOutlined /><span>索引状态</span></Space>} hoverable loading={loading}>
+            <Space direction="vertical" size="small">
+              <Text>
+                {vault.indexing_state === "scanning"
+                  ? "正在索引…"
+                  : vault.last_indexed
+                    ? `最后索引：${vault.last_indexed.slice(0, 19).replace("T", " ")}`
+                    : "尚未索引"}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                点击左上「重新索引」可追赶磁盘变化；文件监听会自动增量更新。
+              </Text>
+            </Space>
+          </Card>
+        </Col>
+      </Row>
     </Space>
   );
 }

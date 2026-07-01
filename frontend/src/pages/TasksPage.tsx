@@ -2,12 +2,13 @@
 // 后端 get_tasks 已就绪（按 done 筛选），本页做分组展示与源笔记钻取。
 
 import { useEffect, useMemo, useState } from "react";
-import { Card, Drawer, List, Space, Spin, Tabs, Tag, Typography } from "antd";
+import { Card, Checkbox, Drawer, List, message, Space, Spin, Tabs, Tag, Typography } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useWikilinkNavigation } from "../hooks/useWikilinkNavigation";
+import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import DataState from "../components/DataState";
-import type { NoteContent, Task } from "../types";
+import type { NoteContent, NoteMeta, Task } from "../types";
 
 const { Text, Title } = Typography;
 
@@ -68,9 +69,18 @@ function completedGroups(tasks: Task[]): Group[] {
 
 export default function TasksPage() {
   const vault = useVaultStore((s) => s.vault);
+  const watcherTick = useVaultStore((s) => s.watcherTick);
+  const { notes } = useAllNotesMeta();
   const [tab, setTab] = useState<"open" | "done">("open");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // note_id → NoteMeta（任务显示来源笔记名用）
+  const noteById = useMemo(() => {
+    const m = new Map<string, NoteMeta>();
+    for (const n of notes) m.set(n.id, n);
+    return m;
+  }, [notes]);
 
   // Drawer：源笔记预览
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
@@ -98,10 +108,26 @@ export default function TasksPage() {
     }
   };
 
+  // 勾选任务 → 写回 vault checkbox（仅 source_line!=null 的 checkbox 类任务可勾）+ 重新拉取
+  const [toggling, setToggling] = useState(false);
+  const onToggle = async (t: Task, done: boolean) => {
+    if (t.source_line == null || toggling) return;
+    setToggling(true);
+    try {
+      await api.toggleTask(t.note_id, t.source_line, done);
+      message.success(done ? "已完成" : "已取消完成");
+      await refresh();
+    } catch (e) {
+      message.error(`勾选失败：${e}`);
+    } finally {
+      setToggling(false);
+    }
+  };
+
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vault?.id, tab]);
+  }, [vault?.id, tab, watcherTick]);
 
   // 打开任务 → 加载其源笔记
   useEffect(() => {
@@ -145,7 +171,20 @@ export default function TasksPage() {
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             {groups.map((g) => (
               <div key={g.label}>
-                <Text strong style={{ display: "block", margin: "8px 0" }}>
+                <Text
+                  strong
+                  style={{
+                    display: "block",
+                    margin: "8px 0",
+                    color: g.label.startsWith("逾期")
+                      ? "#ef4444"
+                      : g.label.startsWith("今天")
+                        ? "#10b981"
+                        : g.label.startsWith("本周")
+                          ? "#3b82f6"
+                          : undefined,
+                  }}
+                >
                   {g.label}
                 </Text>
                 <List
@@ -157,7 +196,19 @@ export default function TasksPage() {
                       onClick={() => setOpenTaskId(t.id)}
                     >
                       <List.Item.Meta
-                        title={<span>{t.done ? "✓ " : ""}{t.text}</span>}
+                        title={
+                          <Space>
+                            {t.source_line != null && (
+                              <Checkbox
+                                checked={t.done}
+                                disabled={toggling}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => onToggle(t, e.target.checked)}
+                              />
+                            )}
+                            <span>{t.done ? "✓ " : ""}{t.text}</span>
+                          </Space>
+                        }
                         description={
                           <Space size={4} wrap>
                             <Tag color="blue">{t.source}</Tag>
@@ -165,6 +216,11 @@ export default function TasksPage() {
                             {t.source_line && (
                               <Text type="secondary" style={{ fontSize: 12 }}>
                                 L{t.source_line}
+                              </Text>
+                            )}
+                            {noteById.get(t.note_id) && (
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                {noteById.get(t.note_id)?.file_name}
                               </Text>
                             )}
                             <Text type="secondary" style={{ fontSize: 12 }}>

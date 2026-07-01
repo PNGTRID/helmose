@@ -7,7 +7,7 @@ import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
 import { openNoteFromMeta } from "../utils/note";
-import type { SearchResult, TagCount } from "../types";
+import type { Backlink, NoteMeta, TagCount } from "../types";
 
 export default function SidePanel({ width }: { width: number }) {
   const tabs = useTabsStore((s) => s.tabs);
@@ -18,15 +18,51 @@ export default function SidePanel({ width }: { width: number }) {
   const watcherTick = useVaultStore((s) => s.watcherTick);
   const active = tabs.find((t) => t.id === activeId);
   const isNote = !!active && active.type === "note";
+  const activeNoteId = active?.noteId;
 
   // 标签（全库，可折叠，置底）
   const [tags, setTags] = useState<TagCount[]>([]);
   const [tagsOpen, setTagsOpen] = useState(true); // 默认展开，点击标题收起
   const [tagQuery, setTagQuery] = useState<string | null>(null);
-  const [tagResults, setTagResults] = useState<SearchResult[]>([]);
+  const [tagResults, setTagResults] = useState<NoteMeta[]>([]);
   const [tagLoading, setTagLoading] = useState(false);
   // 请求序号：仅最新一次标签搜索的回调才 setState，避免快速连点时旧响应覆盖新结果
   const tagReqIdRef = useRef(0);
+
+  // 前向链接（本文链接了谁）：active note 变化时拉取，cancelled flag 守卫
+  const [forwardLinks, setForwardLinks] = useState<Backlink[]>([]);
+
+  // 大纲点击 → 滚动到预览区对应标题（.md-preview 内文本匹配，不依赖后端 id）
+  const scrollIntoOutline = (level: number, text: string) => {
+    const headers = document.querySelectorAll(`.md-preview h${level}`);
+    for (const h of Array.from(headers)) {
+      if (h.textContent?.trim() === text) {
+        h.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!activeNoteId) {
+      setForwardLinks([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getForwardLinks(activeNoteId)
+      .then((res) => {
+        if (!cancelled) setForwardLinks(res);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.error("[SidePanel] 前向链接加载失败", e);
+        setForwardLinks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeNoteId, watcherTick]);
 
   useEffect(() => {
     if (!vault) return;
@@ -54,13 +90,14 @@ export default function SidePanel({ width }: { width: number }) {
     setTagQuery(t);
     setTagLoading(true);
     try {
-      const res = await api.searchNotes(vault.id, t, 50);
+      // 精确按 tag 筛选（tags 数组元素匹配），而非 FTS 全文搜（避免 "project" 命中 "project-status:active"）
+      const res = await api.listNotesByTag(vault.id, t, 200);
       // 仅当本次仍是最新请求时才落库，丢弃过期响应（连点竞态守卫）
       if (tagReqIdRef.current !== myId) return;
       setTagResults(res);
     } catch (e) {
       if (tagReqIdRef.current !== myId) return;
-      console.error("[SidePanel] 标签搜索失败", e);
+      console.error("[SidePanel] 标签筛选失败", e);
       setTagResults([]);
     } finally {
       if (tagReqIdRef.current === myId) setTagLoading(false);
@@ -80,7 +117,13 @@ export default function SidePanel({ width }: { width: number }) {
                 </div>
               ) : (
                 outline.map((o, i) => (
-                  <div key={i} className={`ob-side-link ob-outline-${o.level}`}>
+                  <div
+                    key={i}
+                    className={`ob-side-link ob-outline-${o.level}`}
+                    style={{ cursor: "pointer" }}
+                    title="点击跳到该标题"
+                    onClick={() => scrollIntoOutline(o.level, o.text)}
+                  >
                     {o.text}
                   </div>
                 ))
@@ -102,6 +145,32 @@ export default function SidePanel({ width }: { width: number }) {
                   >
                     {b.source.title ?? b.source.file_name}
                     <div className="ob-side-sub">{b.source.rel_path}</div>
+                    {b.target_text && (
+                      <div className="ob-side-sub" style={{ fontStyle: "italic" }}>↳ {b.target_text}</div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="ob-side-section">
+              <div className="ob-side-title">前向链接（{forwardLinks.length}）</div>
+              {forwardLinks.length === 0 ? (
+                <div style={{ padding: "4px 12px", color: "var(--ob-text-faint)", fontSize: 12 }}>
+                  本文未链接到其他笔记
+                </div>
+              ) : (
+                forwardLinks.map((b, i) => (
+                  <div
+                    key={i}
+                    className="ob-side-link"
+                    onClick={() => openNoteFromMeta(b.source)}
+                  >
+                    {b.source.title ?? b.source.file_name}
+                    <div className="ob-side-sub">{b.source.rel_path}</div>
+                    {b.target_text && (
+                      <div className="ob-side-sub" style={{ fontStyle: "italic" }}>↳ {b.target_text}</div>
+                    )}
                   </div>
                 ))
               )}

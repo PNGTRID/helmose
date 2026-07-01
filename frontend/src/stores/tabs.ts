@@ -31,6 +31,9 @@ interface TabsState {
   openNote: (n: { id: string; title: string | null; file_name: string; rel_path: string }) => void;
   openView: (type: TabType, title: string) => void;
   close: (id: string) => void;
+  closeOthers: (keepId: string) => void;
+  closeToRight: (id: string) => void;
+  closeAll: () => void;
   activate: (id: string) => void;
   toggleFile: () => void;
   toggleSide: () => void;
@@ -80,6 +83,25 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     }
     set({ tabs, activeId });
   },
+
+  closeOthers: (keepId) =>
+    set((s) => {
+      const tabs = s.tabs.filter((t) => t.id === keepId);
+      const activeId =
+        s.activeId && tabs.some((t) => t.id === s.activeId) ? s.activeId : keepId;
+      return { tabs, activeId };
+    }),
+
+  closeToRight: (id) =>
+    set((s) => {
+      const idx = s.tabs.findIndex((t) => t.id === id);
+      if (idx < 0) return s;
+      const tabs = s.tabs.slice(0, idx + 1);
+      const activeId = tabs.some((t) => t.id === s.activeId) ? s.activeId : id;
+      return { tabs, activeId };
+    }),
+
+  closeAll: () => set({ tabs: [], activeId: null }),
 
   activate: (id) => set({ activeId: id }),
   toggleFile: () => set((s) => ({ filePanelOpen: !s.filePanelOpen })),

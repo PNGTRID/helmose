@@ -1,5 +1,6 @@
-// 顶部标签页栏（Obsidian 式多 tab）
+// 顶部标签页栏（Obsidian 式多 tab）+ 右键菜单（关闭其他/右侧/全部）
 import "./TabBar.css";
+import { Dropdown } from "antd";
 import {
   ApartmentOutlined,
   AimOutlined,
@@ -39,32 +40,46 @@ export default function TabBar() {
   const activeId = useTabsStore((s) => s.activeId);
   const activate = useTabsStore((s) => s.activate);
   const close = useTabsStore((s) => s.close);
+  const closeOthers = useTabsStore((s) => s.closeOthers);
+  const closeToRight = useTabsStore((s) => s.closeToRight);
+  const closeAll = useTabsStore((s) => s.closeAll);
 
   if (tabs.length === 0) return null;
+
+  const menuFor = (t: Tab) => ({
+    items: [
+      { key: "close", label: "关闭", onClick: () => close(t.id) },
+      { key: "others", label: "关闭其他", onClick: () => closeOthers(t.id) },
+      { key: "right", label: "关闭右侧", onClick: () => closeToRight(t.id) },
+      { key: "all", label: "关闭全部", onClick: () => closeAll() },
+    ],
+  });
 
   return (
     <div className="ob-tabbar">
       {tabs.map((t) => (
-        <div
-          key={t.id}
-          className={`ob-tab ${t.id === activeId ? "active" : ""}`}
-          onClick={() => activate(t.id)}
-        >
-          <span style={{ display: "inline-flex", alignItems: "center" }}>
-            {iconFor(t)}
-          </span>
-          <span className="ob-tab-label">{t.title}</span>
-          <span
-            className="ob-tab-close"
-            onClick={(e) => {
-              e.stopPropagation();
-              close(t.id);
-            }}
+        <Dropdown key={t.id} menu={menuFor(t)} trigger={["contextMenu"]}>
+          <div
+            className={`ob-tab ${t.id === activeId ? "active" : ""}`}
+            onClick={() => activate(t.id)}
           >
-            <CloseOutlined />
-          </span>
-        </div>
+            <span style={{ display: "inline-flex", alignItems: "center" }}>
+              {iconFor(t)}
+            </span>
+            <span className="ob-tab-label">{t.title}</span>
+            <span
+              className="ob-tab-close"
+              onClick={(e) => {
+                e.stopPropagation();
+                close(t.id);
+              }}
+            >
+              <CloseOutlined />
+            </span>
+          </div>
+        </Dropdown>
       ))}
     </div>
   );
 }
+

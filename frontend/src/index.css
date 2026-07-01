@@ -36,6 +36,25 @@ body,
   --ob-radius: 6px;
 }
 
+/* 暗色模式：html.dark 覆盖 --ob-* 变量（由 stores/theme.ts 切换 class）。
+   Obsidian 暗色调 + 提亮的 accent 紫，保证暗底可读。 */
+html.dark {
+  --ob-bg: #1e1e1e;
+  --ob-bg-mod: #252526;
+  --ob-bg-mod-hover: #2a2d2e;
+  --ob-bg-mod-active: #303032;
+  --ob-border: #3c3c3c;
+  --ob-border-strong: #4a4a4a;
+  --ob-text: #d4d4d4;
+  --ob-text-muted: #9ca3af;
+  --ob-text-faint: #6b7280;
+  --ob-accent: #9d7cf0;
+  --ob-accent-hover: #b394f5;
+  --ob-accent-mod: #2d2440;
+  --ob-tab-active-bg: #1e1e1e;
+  --ob-tab-bg: #2a2a2c;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Microsoft YaHei", Roboto, sans-serif;
@@ -43,6 +62,18 @@ body {
   color: var(--ob-text);
   background: var(--ob-bg);
   -webkit-font-smoothing: antialiased;
+}
+
+/* 键盘按键样式（帮助 Modal 等） */
+kbd {
+  background: var(--ob-bg-mod);
+  border: 1px solid var(--ob-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--ob-text);
 }
 
 /* —— 滚动条（Obsidian 风格细滚动条，app 内全局）—— */

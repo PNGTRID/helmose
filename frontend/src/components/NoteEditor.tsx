@@ -6,8 +6,10 @@ import { Button, Space, message } from "antd";
 import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { keymap } from "@codemirror/view";
 import { marked } from "marked";
 import * as api from "../api";
+import { useThemeStore } from "../stores/theme";
 import type { NoteContent } from "../types";
 
 interface Props {
@@ -21,6 +23,7 @@ export default function NoteEditor({ noteId, rawContent, onSave, onCancel }: Pro
   // 挂载时以 rawContent 初始化 draft（等价原 NoteView 切编辑时的 setDraft(content.raw_content)）
   const [draft, setDraft] = useState(rawContent);
   const [saving, setSaving] = useState(false);
+  const appTheme = useThemeStore((s) => s.theme);
 
   const save = async () => {
     setSaving(true);
@@ -58,8 +61,13 @@ export default function NoteEditor({ noteId, rawContent, onSave, onCancel }: Pro
           <CodeMirror
             value={draft}
             onChange={(val) => setDraft(val)}
-            extensions={[markdown({ base: markdownLanguage })]}
-            theme="light"
+            extensions={[
+              markdown({ base: markdownLanguage }),
+              keymap.of([
+                { key: "Mod-s", preventDefault: true, run: () => { void save(); return true; } },
+              ]),
+            ]}
+            theme={appTheme === "dark" ? "dark" : "light"}
             basicSetup={{
               lineNumbers: false,
               foldGutter: true,

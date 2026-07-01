@@ -1,7 +1,9 @@
 // 轻量自绘 canvas 力导向图谱（不引入额外依赖，避免构建不确定性）
 // 力：中心引力 + 节点排斥 + 边弹簧；支持拖拽 + 点击节点跳转（移动 <5px 视为点击）。
+// 增强：hover 高亮 + cursor pointer + 暗色模式颜色适配（随 theme store 切换）。
 
 import { useEffect, useRef } from "react";
+import { useThemeStore } from "../stores/theme";
 import type { GraphData, GraphNode } from "../types";
 
 interface SimNode {
@@ -36,6 +38,12 @@ export default function ForceGraph({
   const simRef = useRef<Sim | null>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const hoverIdxRef = useRef<number>(-1);
+
+  // 主题色（亮/暗），用 ref 让 effect 不因 theme 变化重跑、但每帧读到最新色
+  const theme = useThemeStore((s) => s.theme);
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
 
   // 重建模拟（data 变化时）
   useEffect(() => {
@@ -84,6 +92,11 @@ export default function ForceGraph({
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     };
     resize();
+
+    const colors = () =>
+      themeRef.current === "dark"
+        ? { node: "#9d7cf0", nodeHover: "#b394f5", edge: "#3c3c3c", hoverRing: "#b394f5" }
+        : { node: "#1677ff", nodeHover: "#4096ff", edge: "#c8c8c8", hoverRing: "#4096ff" };
 
     const step = () => {
       const sim = simRef.current;
@@ -137,8 +150,9 @@ export default function ForceGraph({
         }
 
         // 绘制
+        const c = colors();
         ctx.clearRect(0, 0, W, H);
-        ctx.strokeStyle = "#c8c8c8";
+        ctx.strokeStyle = c.edge;
         ctx.lineWidth = 0.6;
         for (const [a, b] of edges) {
           ctx.beginPath();
@@ -146,11 +160,20 @@ export default function ForceGraph({
           ctx.lineTo(nodes[b].x, nodes[b].y);
           ctx.stroke();
         }
-        for (const n of nodes) {
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
           const r = 3 + Math.min(n.deg * 1.1, 9);
+          const isHover = i === hoverIdxRef.current;
+          if (isHover) {
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, r + 4, 0, Math.PI * 2);
+            ctx.strokeStyle = c.hoverRing;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
           ctx.beginPath();
           ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-          ctx.fillStyle = "#1677ff";
+          ctx.fillStyle = isHover ? c.nodeHover : c.node;
           ctx.fill();
         }
       }
@@ -179,14 +202,20 @@ export default function ForceGraph({
       moved = false;
     };
     const onMove = (e: MouseEvent) => {
-      if (dragIdx === null) return;
       const { x, y } = relPos(e);
-      const sim = simRef.current!;
-      sim.nodes[dragIdx].x = x;
-      sim.nodes[dragIdx].y = y;
-      sim.nodes[dragIdx].vx = 0;
-      sim.nodes[dragIdx].vy = 0;
-      if ((x - downX) ** 2 + (y - downY) ** 2 > 25) moved = true;
+      if (dragIdx !== null) {
+        const sim = simRef.current!;
+        sim.nodes[dragIdx].x = x;
+        sim.nodes[dragIdx].y = y;
+        sim.nodes[dragIdx].vx = 0;
+        sim.nodes[dragIdx].vy = 0;
+        if ((x - downX) ** 2 + (y - downY) ** 2 > 25) moved = true;
+      } else {
+        // 无拖拽时：hover 检测 + cursor 反馈
+        const h = findNode(x, y);
+        hoverIdxRef.current = h;
+        canvas.style.cursor = h >= 0 ? "pointer" : "grab";
+      }
     };
     const onUp = () => {
       if (dragIdx !== null && !moved) {
@@ -197,9 +226,14 @@ export default function ForceGraph({
       }
       dragIdx = null;
     };
+    const onLeave = () => {
+      hoverIdxRef.current = -1;
+      canvas.style.cursor = "grab";
+    };
 
     canvas.addEventListener("mousedown", onDown);
     canvas.addEventListener("mousemove", onMove);
+    canvas.addEventListener("mouseleave", onLeave);
     window.addEventListener("mouseup", onUp);
     window.addEventListener("resize", resize);
 
@@ -207,6 +241,7 @@ export default function ForceGraph({
       cancelAnimationFrame(raf);
       canvas.removeEventListener("mousedown", onDown);
       canvas.removeEventListener("mousemove", onMove);
+      canvas.removeEventListener("mouseleave", onLeave);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("resize", resize);
     };
@@ -219,7 +254,7 @@ export default function ForceGraph({
         width: "100%",
         height: 520,
         marginTop: 8,
-        background: "#fafafa",
+        background: "var(--ob-bg-mod)",
         borderRadius: 8,
         cursor: "grab",
       }}

@@ -1,5 +1,27 @@
 // 笔记域纯函数：大纲提取 + 打开笔记便捷封装（消除各处 openNote 字段映射重复）
 import { useTabsStore, type OutlineItem } from "../stores/tabs";
+import * as api from "../api";
+import { useVaultStore } from "../stores/vault";
+import type { NoteContent } from "../types";
+
+/** 打开或创建今日笔记（后端 create_today_note 封装路径/查已有/模板）。
+ *  TodayPage 按钮、命令面板、Ctrl+J 快捷键共用。成功后开 tab + 重新索引刷新面板。 */
+export async function openOrCreateTodayNote(opts?: {
+  onCreated?: () => void;
+}): Promise<void> {
+  const v = useVaultStore.getState().vault;
+  if (!v) return;
+  const nc: NoteContent = await api.createTodayNote(v.id);
+  useTabsStore.getState().openNote({
+    id: nc.id,
+    title: nc.title ?? nc.rel_path.split("/").pop() ?? "今日笔记",
+    file_name: nc.rel_path.split("/").pop() ?? "",
+    rel_path: nc.rel_path,
+  });
+  // 重新索引让新笔记进入各面板列表
+  await useVaultStore.getState().index();
+  opts?.onCreated?.();
+}
 
 /** 从 raw_content 提取 H1-H3 大纲（供右面板） */
 export function extractOutline(raw: string): OutlineItem[] {

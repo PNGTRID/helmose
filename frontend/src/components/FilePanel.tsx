@@ -2,8 +2,8 @@
 // 顶部显示 Vault 名；树从根目录内容开始（顶层文件夹+根文件）；节点文字单行省略号。
 import "./FilePanel.css";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Empty, Input, Segmented, Spin, Tree } from "antd";
-import { FolderOpenOutlined, FolderOutlined } from "@ant-design/icons";
+import { Button, Empty, Input, message, Modal, Segmented, Spin, Tree } from "antd";
+import { FileAddOutlined, FolderOpenOutlined, FolderOutlined } from "@ant-design/icons";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { openNoteFromMeta } from "../utils/note";
@@ -23,7 +23,14 @@ export default function FilePanel({ width }: { width: number }) {
   const watcherTick = useVaultStore((s) => s.watcherTick);
 
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
-  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  // 展开状态持久化（localStorage，下次打开恢复用户展开的目录）
+  const [expandedKeys, setExpandedKeys] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("helmose-expanded-dirs") || "[]");
+    } catch {
+      return [];
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("natural");
 
@@ -32,7 +39,54 @@ export default function FilePanel({ width }: { width: number }) {
   const [searching, setSearching] = useState(false);
   const isSearch = query.trim().length > 0;
 
+  // 新建笔记（创建到 00_收件箱，用户后续可移动）
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  const createNoteFile = async () => {
+    if (!vault) return;
+    const name = newName.trim();
+    if (!name) {
+      message.warning("请输入笔记名");
+      return;
+    }
+    const fileName = name.endsWith(".md") ? name : `${name}.md`;
+    const relPath = `00_收件箱/${fileName}`;
+    try {
+      const nc = await api.createNote(vault.id, relPath, `# ${name.replace(/\.md$/, "")}\n`);
+      openNoteFromMeta({ id: nc.id, title: name, file_name: fileName, rel_path: nc.rel_path });
+      message.success("已创建到 00_收件箱");
+      setCreateOpen(false);
+      setNewName("");
+      await useVaultStore.getState().index();
+    } catch (e) {
+      message.error(`创建失败（可能已存在）：${e}`);
+    }
+  };
+
   const fileMap = useRef<Map<string, NoteMeta>>(new Map());
+
+  // 展开状态变化时持久化（与初始化读配对）
+  useEffect(() => {
+    try {
+      localStorage.setItem("helmose-expanded-dirs", JSON.stringify(expandedKeys));
+    } catch {
+      /* ignore */
+    }
+  }, [expandedKeys]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // 虚拟滚动高度：测面板可视区，供 antd Tree virtual 模式用（1.9 万节点只渲染可见行）
+  const [treeHeight, setTreeHeight] = useState(400);
+
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const update = () => setTreeHeight(Math.max(200, el.clientHeight - 8));
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!vault) return;
@@ -174,7 +228,31 @@ export default function FilePanel({ width }: { width: number }) {
             { label: "A-Z", value: "name" },
           ]}
         />
+        <Button
+          size="small"
+          type="text"
+          icon={<FileAddOutlined />}
+          onClick={() => setCreateOpen(true)}
+          title="新建笔记（创建到 00_收件箱）"
+        />
       </div>
+
+      <Modal
+        open={createOpen}
+        title="新建笔记"
+        onCancel={() => setCreateOpen(false)}
+        onOk={createNoteFile}
+        okText="创建"
+        cancelText="取消"
+      >
+        <Input
+          autoFocus
+          placeholder="笔记名（将创建 00_收件箱/<笔记名>.md）"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onPressEnter={createNoteFile}
+        />
+      </Modal>
       <div style={{ padding: 6 }}>
         <Input
           placeholder="搜索全库…"
@@ -184,7 +262,7 @@ export default function FilePanel({ width }: { width: number }) {
           size="small"
         />
       </div>
-      <div className="ob-panel-body">
+      <div className="ob-panel-body" ref={bodyRef}>
         {isSearch ? (
           searching ? (
             <Spin size="small" />
@@ -215,6 +293,8 @@ export default function FilePanel({ width }: { width: number }) {
               onExpand={(keys) => setExpandedKeys(keys.map(String))}
               onSelect={onSelect}
               blockNode
+              virtual
+              height={treeHeight}
             />
           </div>
         )}

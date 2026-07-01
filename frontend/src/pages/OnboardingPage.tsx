@@ -11,10 +11,28 @@ const { Title, Text } = Typography;
 export default function OnboardingPage() {
   const setVault = useVaultStore((s) => s.setVault);
   const index = useVaultStore((s) => s.index);
-  const [path, setPath] = useState("/Users/yuanruiqin/wiki");
+  // 路径/名称记忆上次输入（localStorage），减少重复输入
+  const [path, setPath] = useState(
+    () => {
+      try {
+        return localStorage.getItem("helmose-last-path") || "/Users/yuanruiqin/wiki";
+      } catch {
+        return "/Users/yuanruiqin/wiki";
+      }
+    }
+  );
   const [name, setName] = useState("袁锐钦的人生Wiki");
   const [obsidian, setObsidian] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const rememberPath = (p: string) => {
+    setPath(p);
+    try {
+      localStorage.setItem("helmose-last-path", p);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const detectObsidian = async (p: string) => {
     try {
@@ -27,7 +45,7 @@ export default function OnboardingPage() {
   const pick = async () => {
     const p = await api.pickFolder(path);
     if (p) {
-      setPath(p);
+      rememberPath(p);
       await detectObsidian(p);
     }
   };
@@ -102,7 +120,7 @@ export default function OnboardingPage() {
                 <Input
                   style={{ width: "calc(100% - 110px)" }}
                   value={path}
-                  onChange={(e) => setPath(e.target.value)}
+                  onChange={(e) => rememberPath(e.target.value)}
                   placeholder="如 /Users/yuanruiqin/wiki"
                 />
                 <Button icon={<FolderOpenOutlined />} onClick={pick} style={{ width: 110 }}>
