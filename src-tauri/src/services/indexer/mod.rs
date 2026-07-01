@@ -3,11 +3,13 @@
 // 关键洞察：wiki 数据按结构化程度分三档（L1/L2/L3），不能用一套解析器硬套
 // ============================================================
 
+pub mod events;
 pub mod frontmatter;
 pub mod incremental;
 pub mod projects;
 pub mod sections;
 pub mod tasks;
+pub mod tomorrow;
 pub mod wikilinks;
 
 use crate::utils::dates;
@@ -31,6 +33,8 @@ pub struct ParsedNote {
     pub content_hash: Option<String>,
     pub tasks: Vec<tasks::ExtractedTask>,
     pub wikilinks: Vec<wikilinks::ExtractedLink>,
+    pub events: Vec<events::ExtractedEvent>,
+    pub tomorrow_sentence: Option<String>,
 }
 
 /// 解析单个 md 文件（rel_path 相对 vault 根，content 文件全文，mtime 修改时间）
@@ -77,6 +81,10 @@ pub fn parse_file(rel_path: &str, content: &str, mtime: i64) -> ParsedNote {
     }
 
     let wikilink_list = wikilinks::extract(&fm.content);
+    // 事件：从「关键事件 / 事件 / 时间线 / 里程碑」section 提取，event_date 复用 date_iso
+    let event_list = events::extract(date_iso.as_deref(), &sections);
+    // 明日一句：从「明日一句 / 每日一句」section 提取一句话
+    let tomorrow_sentence = tomorrow::extract(&sections);
     // content_hash 在 fm.content move 进 raw_content 之前算好（sha256 规范化正文）
     let content_hash = crate::utils::hash::content_hash(&fm.content);
 
@@ -95,6 +103,8 @@ pub fn parse_file(rel_path: &str, content: &str, mtime: i64) -> ParsedNote {
         content_hash: Some(content_hash),
         tasks: task_list,
         wikilinks: wikilink_list,
+        events: event_list,
+        tomorrow_sentence,
     }
 }
 
@@ -207,8 +217,9 @@ tags: []
     #[test]
     fn parses_no_frontmatter_降级默认() {
         // 无 frontmatter.type + 路径不在契约 type→dir 映射 → note_type=None，layer=L2（降级，不报错）
+        // 用 07 根下非「日志」子目录（07_.../日志/ 现命中 log type，见 contract 测试）
         let p = parse_file(
-            "07_决策与复盘/日志/2026-06/2026-06-21.md",
+            "07_决策与复盘/其他/2026-06-21.md",
             L3_SAMPLE,
             0,
         );

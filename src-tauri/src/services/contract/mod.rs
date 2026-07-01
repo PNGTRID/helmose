@@ -18,7 +18,7 @@ pub const TOP_LEVEL_DIRS: &[&str] = &[
     "09_核心知识库",
 ];
 
-/// 11 种 frontmatter type（规范.md「页面类型说明」契约）
+/// 12 种 frontmatter type（规范.md「页面类型说明」契约 + log 日志补全）
 pub const NOTE_TYPES: &[&str] = &[
     "profile",
     "person",
@@ -31,6 +31,7 @@ pub const NOTE_TYPES: &[&str] = &[
     "experience",
     "comparison",
     "query",
+    "log",
 ];
 
 /// type → 存放目录映射（取自规范.md「页面类型说明」表；目录以 `/` 结尾便于前缀匹配）
@@ -45,6 +46,7 @@ const TYPE_DIR_PAIRS: &[(&str, &str)] = &[
     ("method", "09_核心知识库/方法论/"),
     ("experience", "05_个人成长与认知资产/经历/"),
     ("comparison", "06_学习与资源资产/市场情报/"),
+    ("log", "07_决策与复盘/日志/"),
     ("query", "09_核心知识库/"),
 ];
 
@@ -91,7 +93,7 @@ pub fn infer_note_type(rel_path: &str, fm_type: Option<&str>) -> Option<String> 
 pub fn infer_layer(note_type: Option<&str>) -> i32 {
     match note_type {
         Some("project") | Some("strategy") | Some("profile") | Some("person") => 1,
-        Some("experience") | Some("query") => 3,
+        Some("experience") | Some("log") | Some("query") => 3,
         // book / course / tool / method / comparison / None / 非契约 type → 半结构
         _ => 2,
     }
@@ -116,9 +118,9 @@ mod tests {
 
     #[test]
     fn fm_type_非契约值则忽略走目录反查() {
-        // frontmatter.type 是非约定值（如旧 "log"）→ 忽略，按目录反查
+        // frontmatter.type 是非约定值（如 "xyz"）→ 忽略，按目录反查
         assert_eq!(
-            infer_note_type("01_企业与项目资产/白墨工厂/x.md", Some("log")),
+            infer_note_type("01_企业与项目资产/白墨工厂/x.md", Some("xyz")),
             Some("project".into())
         );
     }
@@ -180,7 +182,8 @@ mod tests {
     fn 反查无匹配降级_none() {
         // 00 / 02 / 03 / 07 / 08 顶层目录无 type 映射 → None（容错降级）
         assert_eq!(infer_note_type("00_收件箱/碎片.md", None), None);
-        assert_eq!(infer_note_type("07_决策与复盘/日志/2026-06/x.md", None), None);
+        // 07 根下非「日志」子目录无 type 映射 → None（07_.../日志/ 现在命中 log，见专门测试）
+        assert_eq!(infer_note_type("07_决策与复盘/其他/x.md", None), None);
         assert_eq!(infer_note_type("02_金融与不动产资产/财务/x.md", None), None);
     }
 
@@ -211,7 +214,9 @@ mod tests {
         assert_eq!(infer_layer(Some("query")), 3);
         // 无 type / 非契约 type → 默认 L2
         assert_eq!(infer_layer(None), 2);
-        assert_eq!(infer_layer(Some("log")), 2);
+        assert_eq!(infer_layer(Some("xyz")), 2);
+        // log 现为契约 type（日志）→ L3（零结构）
+        assert_eq!(infer_layer(Some("log")), 3);
     }
 
     #[test]
@@ -226,10 +231,21 @@ mod tests {
     #[test]
     fn 顶层目录与_type_清单_完整() {
         assert_eq!(TOP_LEVEL_DIRS.len(), 10);
-        assert_eq!(NOTE_TYPES.len(), 11);
+        assert_eq!(NOTE_TYPES.len(), 12);
         // 每种 type 都有目录映射
         for t in NOTE_TYPES {
             assert!(type_to_dir(t).is_some(), "type {} 缺目录映射", t);
         }
+    }
+
+    #[test]
+    fn 日志路径反查_log_type() {
+        // 07_决策与复盘/日志/ 下的笔记 → log type（修复 JournalPage 漏显示日志笔记的 bug）
+        assert_eq!(
+            infer_note_type("07_决策与复盘/日志/2026-07/2026-07-01.md", None),
+            Some("log".into())
+        );
+        assert_eq!(infer_layer(Some("log")), 3);
+        assert_eq!(type_to_dir("log"), Some("07_决策与复盘/日志/"));
     }
 }

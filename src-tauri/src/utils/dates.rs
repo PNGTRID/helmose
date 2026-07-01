@@ -33,14 +33,6 @@ pub fn normalize_date(s: &str) -> Option<NaiveDate> {
     None
 }
 
-/// ISO 周编号（如 2026-W17）→ 返回该周一的 NaiveDate
-pub fn iso_week_to_monday(iso_week: &str) -> Option<NaiveDate> {
-    let caps = RE_WEEK.captures(iso_week.trim())?;
-    let year: i32 = caps[1].parse().ok()?;
-    let week: u32 = caps[2].parse().ok()?;
-    NaiveDate::from_isoywd_opt(year, week, chrono::Weekday::Mon)
-}
-
 /// 今天日期（本地时区，YYYY-MM-DD）
 pub fn today_iso() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
@@ -49,6 +41,14 @@ pub fn today_iso() -> String {
 /// 现在 ISO8601 时间戳
 pub fn now_iso8601() -> String {
     chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+}
+
+/// unix 秒 → ISO8601（UTC rfc3339）。供 projects.last_activity 存库，前端 dayjs 解析做相对时间。
+/// 非法秒（负数溢出等）返回空串（极罕见，上游默认 mtime=0 也能转）。
+pub fn secs_to_iso8601(secs: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

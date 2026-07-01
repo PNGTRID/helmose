@@ -9,14 +9,12 @@ pub struct FrontmatterResult {
     pub data: Value,
     /// 去掉 frontmatter 后的正文
     pub content: String,
-    pub has_frontmatter: bool,
 }
 
 pub fn parse(content: &str) -> FrontmatterResult {
     let matter = Matter::<YAML>::new();
     let parsed = matter.parse(content);
     // gray_matter 0.2.9: parsed.data 是 Option<Pod>（无 frontmatter 时为 None）
-    let has = parsed.data.is_some();
     let data: Value = parsed
         .data
         .as_ref()
@@ -25,6 +23,5 @@ pub fn parse(content: &str) -> FrontmatterResult {
     FrontmatterResult {
         data,
         content: parsed.content,
-        has_frontmatter: has,
     }
 }

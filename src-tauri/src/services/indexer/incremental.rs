@@ -160,14 +160,15 @@ pub fn upsert_rel(
             // 4. 重建该 note 的 tasks
             for t in &p.tasks {
                 tx.execute(
-                    "INSERT INTO tasks (id,note_id,vault_id,text,done,source,source_line,created_at) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                    "INSERT INTO tasks (id,note_id,vault_id,text,done,due_date,source,source_line,created_at) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                     params![
                         uuid::Uuid::new_v4().to_string(),
                         id,
                         vault_id,
                         t.text,
                         if t.done { 1 } else { 0 },
+                        t.due_date,
                         t.source,
                         t.source_line,
                         dates::now_iso8601()
@@ -197,6 +198,69 @@ pub fn upsert_rel(
                         l.alias,
                         if target_id.is_none() { 1 } else { 0 }
                     ],
+                )?;
+            }
+            // 6. 重建该 note 的 projects 行：先删旧（不论现在是否 project），再按需插。
+            //    增量场景全局字段近似——last_activity 用笔记自身 mtime（不扫全库），
+            //    is_mainline/priority 仅本地判定。下次全量索引会修正全局部分（与 wikilink 增量近似同口径）。
+            tx.execute(
+                "DELETE FROM projects WHERE vault_id = ?1 AND note_id = ?2",
+                params![vault_id, id],
+            )?;
+            if let Some(mut info) = indexer::projects::extract(&p) {
+                info.last_activity = Some(crate::utils::dates::secs_to_iso8601(info.activity_mtime));
+                tx.execute(
+                    "INSERT INTO projects \
+                     (id,vault_id,note_id,name,status,priority,is_mainline,okr_priority,home_rel_path,last_activity) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                    params![
+                        uuid::Uuid::new_v4().to_string(),
+                        vault_id,
+                        id,
+                        info.name,
+                        info.status,
+                        info.priority,
+                        if info.is_mainline { 1 } else { 0 },
+                        info.okr_priority,
+                        info.home_rel_path,
+                        info.last_activity,
+                    ],
+                )?;
+            }
+            // 7. 重建该 note 的 events 行
+            tx.execute(
+                "DELETE FROM events WHERE vault_id = ?1 AND note_id = ?2",
+                params![vault_id, id],
+            )?;
+            for ev in &p.events {
+                tx.execute(
+                    "INSERT INTO events \
+                     (id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                    params![
+                        uuid::Uuid::new_v4().to_string(),
+                        id,
+                        vault_id,
+                        ev.title,
+                        ev.event_time,
+                        ev.event_date,
+                        ev.content,
+                        ev.output,
+                        None::<String>,
+                        ev.raw_bullet,
+                    ],
+                )?;
+            }
+            // 8. 重建该 note 的 tomorrow_sentence（需 date_iso）
+            tx.execute(
+                "DELETE FROM tomorrow_sentences WHERE vault_id = ?1 AND note_id = ?2",
+                params![vault_id, id],
+            )?;
+            if let (Some(date), Some(s)) = (&p.date_iso, &p.tomorrow_sentence) {
+                tx.execute(
+                    "INSERT INTO tomorrow_sentences (id,note_id,vault_id,date_iso,sentence) \
+                     VALUES (?1,?2,?3,?4,?5)",
+                    params![uuid::Uuid::new_v4().to_string(), id, vault_id, date, s],
                 )?;
             }
             Ok(())
