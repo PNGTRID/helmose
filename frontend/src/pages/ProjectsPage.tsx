@@ -2,7 +2,7 @@
 // 数据源：get_projects 一次拉取内存切视图（不重复 IPC）；进度视图单独调 get_project_progress。
 // 就地：看板 inline 改 status/mainline/priority；列表/网格/负责人点击 → NoteEditorDrawer。
 // 视图状态 localStorage 持久化（与 tabs/theme 同模式）。
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   InputNumber,
@@ -15,6 +15,7 @@ import {
   Typography,
 } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
+import AppIcon from "../components/AppIcon";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useProjectViewStore, type ProjectView } from "../stores/projectView";
@@ -35,12 +36,12 @@ import type { Project } from "../types";
 
 const { Text } = Typography;
 
-const VIEW_OPTIONS: { label: string; value: ProjectView }[] = [
-  { label: "🗂 看板", value: "kanban" },
-  { label: "📋 列表", value: "list" },
-  { label: "🔲 网格", value: "grid" },
-  { label: "📊 进度", value: "progress" },
-  { label: "👤 负责人", value: "owner" },
+const VIEW_OPTIONS: { label: ReactNode; value: ProjectView }[] = [
+  { label: (<><AppIcon name="apps" size={13} /> 看板</>), value: "kanban" },
+  { label: (<><AppIcon name="list" size={13} /> 列表</>), value: "list" },
+  { label: (<><AppIcon name="table" size={13} /> 网格</>), value: "grid" },
+  { label: (<><AppIcon name="dashboard" size={13} /> 进度</>), value: "progress" },
+  { label: (<><AppIcon name="user" size={13} /> 负责人</>), value: "owner" },
 ];
 
 const bumpTick = () => useVaultStore.getState().bumpTick();

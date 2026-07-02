@@ -27,7 +27,7 @@ function mkTask(partial: Partial<Task> & { id: string }): Task {
     completed_at: partial.completed_at,
     status: partial.status ?? "todo",
     priority: partial.priority ?? 0,
-    urgency: partial.urgency ?? "low",
+    urgency: partial.urgency ?? "", // 默认未设（无标记，前端 due_date 派生；三态 Blocker #1 方案 B）
   };
 }
 
@@ -152,5 +152,18 @@ describe("computeUrgencyMap", () => {
     expect(m.get("3")).toBe("mid");
     expect(m.get("4")).toBe("low");
     expect(m.get("5")).toBe("low");
+  });
+
+  it("三态：显式 low 压制 due_date 派生 high（Blocker #1 方案 B 根治）", () => {
+    const m = computeUrgencyMap([
+      mkTask({ id: "1", urgency: "low", due_date: "2020-01-01" }), // 显式 low + 逾期 → low（压制）
+      mkTask({ id: "2", urgency: "low", due_date: todayIso() }), // 显式 low + 今天 → low（关键修复点）
+      mkTask({ id: "3", urgency: "", due_date: todayIso() }), // 未设 + 今天 → high（派生）
+      mkTask({ id: "4", urgency: "high", due_date: "2099-12-31" }), // 显式 high + 远期 → high（强制）
+    ]);
+    expect(m.get("1")).toBe("low");
+    expect(m.get("2")).toBe("low"); // 修前派生 high 拖不进 q4；修后显式 low 压制，留在「不紧急」象限
+    expect(m.get("3")).toBe("high");
+    expect(m.get("4")).toBe("high");
   });
 });

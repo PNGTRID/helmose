@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Helmose · 做计划（布局预览）</title>
+<style>
+/* ============================================================
+   Helmose Obsidian 设计语言：--ob-* CSS 变量 + html.dark 暗色
+   三栏：左（收集箱/分类/日历） 中（输入条+四象限） 右（计划详情）
+   ============================================================ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --ob-bg: #ffffff;
+  --ob-bg-mod: #f8f9fa;
+  --ob-bg-mod-hover: #eef0f3;
+  --ob-bg-mod-active: #e7e9ec;
+  --ob-border: #e5e5e5;
+  --ob-border-strong: #d4d4d4;
+  --ob-text: #333333;
+  --ob-text-muted: #6b7280;
+  --ob-text-faint: #9ca3af;
+  --ob-accent: #7c3aed;
+  --ob-accent-hover: #6d28d9;
+  --ob-accent-mod: #f3eeff;
+  --ob-tab-active-bg: #ffffff;
+  --ob-tab-bg: #f0f0f2;
+  --ob-radius: 6px;
+  /* 四象限配色（参考图：黄/红/绿/蓝，Obsidian 克制版） */
+  --q1: #ef4444;  /* 重要且紧急 · 红 */
+  --q2: #3b82f6;  /* 重要不紧急 · 蓝 */
+  --q3: #f59e0b;  /* 紧急不重要 · 黄 */
+  --q4: #10b981;  /* 不重要不紧急 · 绿 */
+  --ob-event: #10b981;
+}
+html.dark {
+  --ob-bg: #1e1e1e;
+  --ob-bg-mod: #252526;
+  --ob-bg-mod-hover: #2a2d2e;
+  --ob-bg-mod-active: #303032;
+  --ob-border: #3c3c3c;
+  --ob-border-strong: #4a4a4a;
+  --ob-text: #d4d4d4;
+  --ob-text-muted: #9ca3af;
+  --ob-text-faint: #6b7280;
+  --ob-accent: #9d7cf0;
+  --ob-accent-hover: #b394f5;
+  --ob-accent-mod: #2d2440;
+  --ob-tab-active-bg: #1e1e1e;
+  --ob-tab-bg: #2a2a2c;
+  --q1: #f87171;
+  --q2: #60a5fa;
+  --q3: #fbbf24;
+  --q4: #34d399;
+  --ob-event: #34d399;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
+  font-size: 14px; color: var(--ob-text); background: var(--ob-bg);
+  height: 100vh; overflow: hidden; -webkit-font-smoothing: antialiased;
+}
+button { font-family: inherit; color: inherit; }
+input { font-family: inherit; }
+
+/* ============ Obsidian 工作台外壳 ============ */
+.ob-app { display: flex; height: 100vh; width: 100vw; overflow: hidden; background: var(--ob-bg); }
+
+.ob-ribbon {
+  width: 72px; flex-shrink: 0;
+  background: var(--ob-bg-mod); border-right: 1px solid var(--ob-border);
+  display: flex; flex-direction: column; align-items: stretch;
+  padding: 8px 0; gap: 2px;
+}
+.ob-ribbon-brand { width: 100%; height: 36px; display: flex; align-items: center; justify-content: center; font-size: 20px; margin-bottom: 8px; }
+.ob-ribbon-btn {
+  width: 100%; min-height: 50px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  border-radius: var(--ob-radius); color: var(--ob-text-muted);
+  cursor: pointer; border: none; background: transparent;
+  font-size: 18px; padding: 6px 2px;
+}
+.ob-ribbon-btn:hover { background: var(--ob-bg-mod-hover); color: var(--ob-text); }
+.ob-ribbon-btn.active { color: var(--ob-accent); background: var(--ob-accent-mod); }
+.ob-ribbon-label { font-size: 10px; line-height: 1.2; }
+.ob-ribbon-spacer { flex: 1; }
+
+.ob-main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--ob-bg); }
+
+.ob-tabbar {
+  display: flex; align-items: center; gap: 2px;
+  padding: 0 8px; height: 36px;
+  background: var(--ob-bg-mod); border-bottom: 1px solid var(--ob-border);
+  flex-shrink: 0;
+}
+.ob-tab {
+  display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px;
+  border-radius: var(--ob-radius) var(--ob-radius) 0 0;
+  background: transparent; border: none;
+  color: var(--ob-text-muted); font-size: 13px; cursor: pointer;
+}
+.ob-tab:hover { background: var(--ob-bg-mod-hover); color: var(--ob-text); }
+.ob-tab.active { background: var(--ob-tab-active-bg); color: var(--ob-text); font-weight: 500; border: 1px solid var(--ob-border); border-bottom: 1px solid var(--ob-tab-active-bg); margin-bottom: -1px; }
+.ob-tabbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ob-text-faint); padding-right: 8px; }
+
+/* content：三栏 grid，各栏独立滚动 */
+.ob-content {
+  flex: 1; min-height: 0; overflow: hidden;
+  display: grid; grid-template-columns: 250px 1fr 320px; gap: 14px;
+  padding: 14px;
+}
+.col { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; padding-right: 2px; }
+.col::-webkit-scrollbar { width: 8px; }
+.col::-webkit-scrollbar-thumb { background: var(--ob-border-strong); border-radius: 4px; }
+.col::-webkit-scrollbar-track { background: transparent; }
+
+/* 面板（Obsidian Card） */
+.panel {
+  background: var(--ob-bg); border: 1px solid var(--ob-border);
+  border-radius: var(--ob-radius); padding: 12px;
+}
+.panel-title { font-size: 12px; color: var(--ob-text-muted); font-weight: 500; letter-spacing: .3px; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+
+/* ============ 左栏 ============ */
+/* 收集箱（顶） */
+.inbox { background: var(--ob-accent-mod); border: 1px solid transparent; border-radius: var(--ob-radius); padding: 12px; }
+.inbox-row { display: flex; justify-content: space-between; align-items: center; }
+.inbox-title { font-size: 13px; color: var(--ob-accent-hover); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.inbox-count { font-size: 22px; font-weight: 600; color: var(--ob-accent); line-height: 1; }
+.inbox-foot { font-size: 11px; color: var(--ob-text-muted); margin-top: 3px; }
+
+.icon-btn { border: 1px solid var(--ob-border); background: var(--ob-bg); color: var(--ob-text-muted); border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 12px; padding: 2px 8px; transition: all .15s; }
+.icon-btn:hover { border-color: var(--ob-accent); color: var(--ob-accent); }
+
+/* 分类 */
+.cat-list { display: flex; flex-direction: column; gap: 2px; }
+.cat-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; transition: background .12s; }
+.cat-item:hover { background: var(--ob-bg-mod-hover); }
+.cat-item.active { background: var(--ob-accent-mod); }
+.cat-item.active .cat-name { color: var(--ob-accent); }
+.cat-emoji { font-size: 14px; width: 18px; text-align: center; }
+.cat-name { flex: 1; font-size: 13px; }
+.cat-count { font-size: 11px; color: var(--ob-text-faint); }
+.cat-actions { display: flex; gap: 3px; opacity: 0; }
+.cat-item:hover .cat-actions { opacity: 1; }
+.mini-btn { border: 1px solid var(--ob-border); background: var(--ob-bg); color: var(--ob-text-muted); border-radius: 3px; padding: 0 6px; font-size: 11px; cursor: pointer; line-height: 18px; }
+.mini-btn:hover { border-color: var(--ob-accent); color: var(--ob-accent); }
+.mini-btn.del:hover { border-color: var(--q1); color: var(--q1); }
+.new-cat-btn { width: 100%; margin-top: 8px; padding: 7px; border: 1px dashed var(--ob-border-strong); background: transparent; border-radius: 4px; color: var(--ob-text-muted); cursor: pointer; font-size: 12px; }
+.new-cat-btn:hover { border-color: var(--ob-accent); color: var(--ob-accent); background: var(--ob-accent-mod); }
+
+/* 日历（左栏底，紧凑迷你月历） */
+.cal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.cal-month { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.cal-nav { display: flex; gap: 4px; }
+.cal-nav button { width: 22px; height: 22px; border: 1px solid var(--ob-border); background: var(--ob-bg); color: var(--ob-text-muted); border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 1; }
+.cal-nav button:hover { border-color: var(--ob-accent); color: var(--ob-accent); }
+.mini-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+.mini-wk { text-align: center; font-size: 10px; color: var(--ob-text-faint); padding: 3px 0; }
+.mini-wk.weekend { color: var(--q1); }
+.mini-day { position: relative; text-align: center; font-size: 11px; padding: 5px 0; cursor: pointer; border-radius: 4px; color: var(--ob-text); }
+.mini-day:hover { background: var(--ob-bg-mod-hover); }
+.mini-day.other { color: var(--ob-text-faint); }
+.mini-day.today { background: var(--ob-accent); color: #fff; font-weight: 600; }
+.mini-day.selected { background: var(--ob-accent-mod); color: var(--ob-accent); font-weight: 600; }
+.mini-day .dot { position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%); width: 3px; height: 3px; border-radius: 50%; background: var(--q1); }
+.mini-day.today .dot { background: #fff; }
+
+/* ============ 中栏 ============ */
+.center-col { gap: 12px; }
+
+/* 顶部快速输入条 */
+.quick-add {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--ob-bg-mod); border: 1px solid var(--ob-border);
+  border-radius: var(--ob-radius); padding: 7px 10px; flex-shrink: 0;
+}
+.quick-add .qa-plus { width: 22px; height: 22px; border-radius: 50%; background: var(--ob-accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: pointer; flex-shrink: 0; }
+.quick-add input { flex: 1; border: none; background: transparent; outline: none; font-size: 13px; color: var(--ob-text); }
+.quick-add input::placeholder { color: var(--ob-text-faint); }
+.quick-add .qa-tools { display: flex; gap: 4px; }
+.quick-add .qa-tool { width: 26px; height: 26px; border: none; background: transparent; border-radius: 4px; cursor: pointer; font-size: 14px; color: var(--ob-text-muted); }
+.quick-add .qa-tool:hover { background: var(--ob-bg-mod-hover); }
+
+/* 四象限 2x2（占满中栏剩余） */
+.quads-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; flex: 1; min-height: 0; }
+.quad { position: relative; background: var(--ob-bg); border: 2px solid; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.quad.q1 { border-color: var(--q1); }
+.quad.q2 { border-color: var(--q2); }
+.quad.q3 { border-color: var(--q3); }
+.quad.q4 { border-color: var(--q4); }
+.quad-head { display: flex; align-items: center; gap: 6px; padding-bottom: 6px; margin-bottom: 8px; border-bottom: 1px solid var(--ob-border); }
+.quad-emoji { font-size: 15px; }
+.quad-name { font-size: 13px; font-weight: 600; flex: 1; }
+.quad-tag { font-size: 10px; color: var(--ob-text-faint); }
+.quad-sub { font-size: 11px; color: var(--ob-text-muted); margin: -4px 0 6px; }
+/* 配图装饰（右下大 emoji，低透明） */
+.quad-decor { position: absolute; right: -6px; bottom: -10px; font-size: 72px; opacity: .12; pointer-events: none; user-select: none; }
+.quad-tasks { display: flex; flex-direction: column; gap: 5px; flex: 1; overflow-y: auto; position: relative; z-index: 1; }
+.empty-tip { color: var(--ob-text-faint); font-size: 12px; text-align: center; padding: 10px 0; }
+
+/* 任务卡 */
+.task-card { display: flex; align-items: flex-start; gap: 6px; padding: 7px 9px; background: var(--ob-bg); border: 1px solid var(--ob-border); border-radius: 6px; cursor: pointer; transition: box-shadow .15s, border-color .15s; }
+.task-card:hover { border-color: var(--ob-accent); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.task-card.selected { border-color: var(--ob-accent); background: var(--ob-accent-mod); }
+.task-card .ck { margin-top: 2px; accent-color: var(--ob-accent); cursor: pointer; }
+.task-card-main { flex: 1; min-width: 0; }
+.tc-title { font-size: 13px; line-height: 1.4; }
+.tc-title.done { color: var(--ob-text-faint); text-decoration: line-through; }
+.tc-meta { margin-top: 3px; font-size: 11px; color: var(--ob-text-muted); display: flex; gap: 8px; flex-wrap: wrap; }
+.tc-meta .overdue { color: var(--q1); }
+
+/* ============ 右栏：计划详情 ============ */
+.detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--ob-text-faint); font-size: 13px; gap: 10px; text-align: center; padding: 20px; }
+.detail-empty .big { font-size: 40px; opacity: .5; }
+
+.detail { display: flex; flex-direction: column; height: 100%; }
+.detail-head { display: flex; align-items: flex-start; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--ob-border); margin-bottom: 12px; }
+.detail-head-emoji { font-size: 18px; padding-top: 2px; }
+.detail-head-main { flex: 1; min-width: 0; }
+.detail-title-row { display: flex; align-items: center; gap: 6px; }
+.detail-title { font-size: 15px; font-weight: 600; flex: 1; }
+.detail-quad-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; color: #fff; }
+.detail-sub { font-size: 11px; color: var(--ob-text-muted); margin-top: 3px; }
+.detail-close { border: none; background: transparent; font-size: 20px; color: var(--ob-text-faint); cursor: pointer; line-height: 1; }
+.detail-close:hover { color: var(--ob-text); }
+
+.detail-body { flex: 1; overflow-y: auto; padding-right: 4px; }
+.detail-body::-webkit-scrollbar { width: 6px; }
+.detail-body::-webkit-scrollbar-thumb { background: var(--ob-border-strong); border-radius: 3px; }
+
+.field { margin-bottom: 14px; }
+.field-label { font-size: 12px; color: var(--ob-text-muted); margin-bottom: 5px; display: flex; align-items: center; gap: 4px; }
+.field-input { width: 100%; padding: 7px 10px; border: 1px solid var(--ob-border); border-radius: 6px; font-size: 13px; outline: none; background: var(--ob-bg-mod); color: var(--ob-text); transition: border-color .15s, box-shadow .15s; }
+.field-input:focus { border-color: var(--ob-accent); box-shadow: 0 0 0 2px rgba(124,58,237,.15); background: var(--ob-bg); }
+textarea.field-input { resize: vertical; min-height: 60px; line-height: 1.5; }
+
+/* 日期快捷按钮组 */
+.date-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.date-chip { border: 1px solid var(--ob-border); background: var(--ob-bg); color: var(--ob-text-muted); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.date-chip:hover { border-color: var(--ob-accent); color: var(--ob-accent); }
+.date-chip.active { background: var(--ob-accent-mod); border-color: var(--ob-accent); color: var(--ob-accent); font-weight: 500; }
+
+/* 属性行（▶ 可展开） */
+.attr-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px; border: 1px solid var(--ob-border); border-radius: 6px; cursor: pointer; margin-bottom: 6px; transition: all .12s; }
+.attr-row:hover { background: var(--ob-bg-mod-hover); }
+.attr-row.open { border-color: var(--ob-accent); background: var(--ob-accent-mod); }
+.attr-label { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.attr-value { font-size: 12px; color: var(--ob-text-muted); display: flex; align-items: center; gap: 4px; }
+.attr-arrow { font-size: 9px; transition: transform .15s; }
+.attr-row.open .attr-arrow { transform: rotate(90deg); }
+.attr-options { display: none; flex-wrap: wrap; gap: 5px; padding: 4px 0 10px 4px; }
+.attr-options.show { display: flex; }
+.opt-chip { border: 1px solid var(--ob-border); background: var(--ob-bg); color: var(--ob-text-muted); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.opt-chip:hover { border-color: var(--ob-accent); color: var(--ob-accent); }
+.opt-chip.active { background: var(--ob-accent-mod); border-color: var(--ob-accent); color: var(--ob-accent); }
+.opt-chip.q1 { border-left: 3px solid var(--q1); }
+.opt-chip.q2 { border-left: 3px solid var(--q2); }
+.opt-chip.q3 { border-left: 3px solid var(--q3); }
+.opt-chip.q4 { border-left: 3px solid var(--q4); }
+
+/* 子计划 */
+.subtask-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--ob-border); }
+.subtask-row:last-child { border-bottom: none; }
+.subtask-row .ck { accent-color: var(--ob-accent); }
+.subtask-row input[type=text] { flex: 1; border: none; background: transparent; outline: none; font-size: 13px; color: var(--ob-text); }
+.subtask-row input[type=text]::placeholder { color: var(--ob-text-faint); }
+.add-subtask { width: 100%; padding: 7px; border: 1px dashed var(--ob-border-strong); background: var(--ob-bg-mod); border-radius: 4px; cursor: pointer; color: var(--ob-text-muted); font-size: 12px; margin-top: 6px; }
+.add-subtask:hover { border-color: var(--ob-accent); color: var(--ob-accent); }
+
+/* 详情底栏 */
+.detail-foot { display: flex; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--ob-border); margin-top: 10px; }
+.btn { padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; border: 1px solid var(--ob-border); background: var(--ob-bg); color: var(--ob-text); }
+.btn:hover { border-color: var(--ob-accent); color: var(--ob-accent); }
+.btn-primary { background: var(--ob-accent); color: #fff; border-color: var(--ob-accent); }
+.btn-primary:hover { background: var(--ob-accent-hover); border-color: var(--ob-accent-hover); color: #fff; }
+.btn-block { flex: 1; }
+.icon-only { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--ob-border); background: var(--ob-bg); border-radius: 4px; cursor: pointer; color: var(--ob-text-muted); font-size: 16px; }
+.icon-only:hover { border-color: var(--ob-accent); color: var(--ob-accent); }
+
+/* ============ StatusBar ============ */
+.ob-statusbar { height: 24px; flex-shrink: 0; background: var(--ob-bg-mod); border-top: 1px solid var(--ob-border); display: flex; align-items: center; gap: 14px; padding: 0 12px; font-size: 11px; color: var(--ob-text-muted); }
+.ob-statusbar .item { display: flex; align-items: center; gap: 4px; }
+.ob-statusbar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ob-event); }
+.ob-statusbar .click { cursor: pointer; }
+.ob-statusbar .click:hover { color: var(--ob-accent); }
+.ob-statusbar .spacer { flex: 1; }
+
+/* 弹窗（分类新建/删除复用） */
+.mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 1000; }
+.mask.show { display: flex; }
+.modal { background: var(--ob-bg); border-radius: 8px; width: 400px; max-width: 92vw; border: 1px solid var(--ob-border); box-shadow: 0 8px 32px rgba(0,0,0,.18); }
+.modal-head { padding: 14px 20px; border-bottom: 1px solid var(--ob-border); display: flex; justify-content: space-between; align-items: center; }
+.modal-title { font-size: 15px; font-weight: 600; }
+.modal-close { border: none; background: transparent; font-size: 22px; color: var(--ob-text-faint); cursor: pointer; line-height: 1; }
+.modal-close:hover { color: var(--ob-text); }
+.modal-body { padding: 18px 20px; }
+.modal-foot { padding: 12px 20px; border-top: 1px solid var(--ob-border); display: flex; justify-content: flex-end; gap: 8px; }
+.btn-danger { background: var(--q1); color: #fff; border-color: var(--q1); }
+.btn-danger:hover { opacity: .9; color: #fff; }
+.radio-row { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid var(--ob-border); border-radius: 6px; margin-bottom: 6px; cursor: pointer; }
+.radio-row.active { border-color: var(--ob-accent); background: var(--ob-accent-mod); }
+.radio-row input { margin-top: 2px; accent-color: var(--ob-accent); }
+.r-title { font-size: 13px; font-weight: 500; }
+.r-desc { font-size: 11px; color: var(--ob-text-muted); margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div class="ob-app">
+
+  <!-- ============ Ribbon（已移除 视图/专注） ============ -->
+  <nav class="ob-ribbon">
+    <div class="ob-ribbon-brand">⚓</div>
+    <button class="ob-ribbon-btn active"><span>📅</span><span class="ob-ribbon-label">做计划</span></button>
+    <button class="ob-ribbon-btn" onclick="alert('日历（预览占位）')"><span>📆</span><span class="ob-ribbon-label">日历</span></button>
+    <button class="ob-ribbon-btn" onclick="alert('设置（预览占位）')"><span>⚙️</span><span class="ob-ribbon-label">设置</span></button>
+    <div class="ob-ribbon-spacer"></div>
+    <button class="ob-ribbon-btn" onclick="toggleTheme()" title="切换主题"><span id="themeIcon">🌙</span><span class="ob-ribbon-label">主题</span></button>
+  </nav>
+
+  <!-- ============ 主区 ============ -->
+  <div class="ob-main">
+
+    <div class="ob-tabbar">
+      <button class="ob-tab active">📅 做计划</button>
+      <div class="ob-tabbar-right">
+        <span>~/wiki</span>
+        <button class="mini-btn" onclick="alert('退出登录（预览占位）')">退出登录</button>
+      </div>
+    </div>
+
+    <!-- content：三栏 -->
+    <div class="ob-content">
+
+      <!-- ============ 左栏：收集箱 → 分类 → 日历 ============ -->
+      <aside class="col left-col">
+        <!-- 收集箱 -->
+        <div class="inbox">
+          <div class="inbox-row">
+            <div class="inbox-title">📥 收集箱</div>
+            <div class="inbox-count" id="inboxCount">0</div>
+          </div>
+          <div class="inbox-foot">未归类临时任务</div>
+        </div>
+
+        <!-- 分类 -->
+        <div class="panel">
+          <div class="panel-title">🗂 任务分类</div>
+          <div class="cat-list" id="catList"></div>
+          <button class="new-cat-btn" onclick="openCategoryModal()">+ 新建分类</button>
+        </div>
+
+        <!-- 日历（底部） -->
+        <div class="panel">
+          <div class="cal-head">
+            <div class="cal-month" id="miniMonth">2026年07月</div>
+            <div class="cal-nav">
+              <button onclick="changeMonth(-1)">‹</button>
+              <button onclick="changeMonth(1)">›</button>
+            </div>
+          </div>
+          <div class="mini-cal-grid" id="miniCal"></div>
+        </div>
+      </aside>
+
+      <!-- ============ 中栏：四象限 + 底部输入条 ============ -->
+      <section class="col center-col">
+        <!-- 四象限（按参考图位置：左上紧急不重要 / 右上重要且紧急 / 左下不重要不紧急 / 右下重要不紧急） -->
+        <div class="quads-grid" id="quadsGrid" style="display:grid; flex:1;"></div>
+
+        <!-- 底部输入条：回车添加计划到收集箱 -->
+        <div class="quick-add">
+          <span class="qa-plus" onclick="quickAddFromBar()">+</span>
+          <input id="quickInput" placeholder="添加计划到「收集箱」，回车即可保存" onkeydown="if(event.key==='Enter')quickAddFromBar()">
+          <div class="qa-tools">
+            <button class="qa-tool" title="灵感">💡</button>
+            <button class="qa-tool" title="选日期" onclick="alert('日期选择（预览占位）')">📅</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 右栏：计划详情 ============ -->
+      <aside class="col right-col">
+        <div class="panel" style="display:flex; flex-direction:column; height:100%; padding:14px;">
+          <div id="detailContainer" style="display:flex; flex-direction:column; height:100%;">
+            <!-- 空态 / 详情 JS 渲染 -->
+          </div>
+        </div>
+      </aside>
+
+    </div>
+
+    <!-- StatusBar -->
+    <div class="ob-statusbar">
+      <div class="item"><span class="dot"></span> 已索引</div>
+      <div class="item">vault: ~/wiki</div>
+      <div class="item">19,283 篇笔记</div>
+      <div class="spacer"></div>
+      <div class="item">主线: Helmose v0.2</div>
+      <div class="item click" onclick="toggleTheme()"><span id="themeIcon2">🌙</span> 切换主题</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ============ 分类弹窗 ============ -->
+<div class="mask" id="catMask">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title" id="catModalTitle">新建分类</div>
+      <button class="modal-close" onclick="closeCatModal()">×</button>
+    </div>
+    <div class="modal-body" id="catModalBody"></div>
+    <div class="modal-foot" id="catModalFoot"></div>
+  </div>
+</div>
+
+<script>
+/* ============ 四象限定义（参考图配色 + emoji + 插图） ============ */
+const QUADS = {
+  q1: { key:'q1', name:'重要且紧急', emoji:'❤️', sub:'什么什么',       tip:'立即做',  decor:'🔥' },
+  q2: { key:'q2', name:'重要不紧急', emoji:'☁️', sub:'规划后再做',     tip:'计划做',  decor:'🦉' },
+  q3: { key:'q3', name:'紧急不重要', emoji:'👑', sub:'没有什么',       tip:'快做',    decor:'⚡' },
+  q4: { key:'q4', name:'不重要不紧急', emoji:'🍃', sub:'有空再做',     tip:'有空做',  decor:'🐧' },
+};
+/* 参考图网格位置：左上 q3 / 右上 q1 / 左下 q4 / 右下 q2 */
+const QUAD_ORDER = ['q3','q1','q4','q2'];
+
+/* ============ 工具 ============ */
+const pad = n => String(n).padStart(2,'0');
+const fmt = d => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const today = () => fmt(new Date());
+const addDays = (s,n) => { const d = s ? new Date(s) : new Date(); d.setDate(d.getDate()+n); return fmt(d); };
+const uid = () => Date.now() + Math.floor(Math.random()*1000);
+
+/* ============ 状态 ============ */
+const STATE = {
+  categories: [
+    { id:'all',   name:'全部',   emoji:'🗂' },
+    { id:'none',  name:'无分类', emoji:'⊘' },
+    { id:'work',  name:'工作',   emoji:'💼' },
+    { id:'life',  name:'生活',   emoji:'🏠' },
+    { id:'study', name:'学习',   emoji:'📚' },
+  ],
+  tasks: [
+    { id:1, title:'季度 OKR 复盘会', desc:'整理 Q2 成果与 Q3 目标', cat:'work',  quad:'q1', deadline: today(),           done:false, sub:[], repeat:'none' },
+    { id:2, title:'读《深度工作》第 3 章', desc:'', cat:'study', quad:'q2', deadline: addDays(today(),3),  done:false, sub:[], repeat:'none' },
+    { id:3, title:'回复客户邮件', desc:'', cat:'work', quad:'q3', deadline: addDays(today(),-1), done:false, sub:[], repeat:'none', overdue:true },
+    { id:4, title:'整理桌面文件', desc:'', cat:'life', quad:'q4', deadline: '',                done:false, sub:[], repeat:'none' },
+    { id:5, title:'写 Helmose 架构文档', desc:'输出 M1 架构图与模块清单', cat:'work', quad:'q2', deadline: addDays(today(),5), done:false, sub:['画架构图','列模块清单'], repeat:'weekly' },
+    { id:6, title:'每日站会', desc:'', cat:'work', quad:'q3', deadline: today(), done:false, sub:[], repeat:'daily' },
+    { id:7, title:'健身：跑步 30 分钟', desc:'', cat:'life', quad:'q4', deadline: today(), done:false, sub:[], repeat:'daily' },
+  ],
+  viewYear: 2026, viewMonth: 6, // 0-based：6=七月
+  activeCat: 'all',
+  selectedId: null, // 右栏选中的任务
+};
+
+/* ============ 主题 ============ */
+function toggleTheme(){
+  const isDark = document.documentElement.classList.toggle('dark');
+  const ic = isDark ? '☀️' : '🌙';
+  document.getElementById('themeIcon').textContent = ic;
+  document.getElementById('themeIcon2').textContent = ic;
+}
+
+/* ============ 渲染：分类 ============ */
+function renderCategories(){
+  const list = document.getElementById('catList');
+  list.innerHTML = STATE.categories.map(c=>{
+    const count = c.id==='all'
+      ? STATE.tasks.length
+      : STATE.tasks.filter(t=>t.cat===c.id).length;
+    const active = STATE.activeCat===c.id ? 'active' : '';
+    const canAdd = c.id!=='all';
+    return `
+      <div class="cat-item ${active}" onclick="setActiveCat('${c.id}')">
+        <span class="cat-emoji">${c.emoji}</span>
+        <span class="cat-name">${c.name}</span>
+        <span class="cat-count">${count}</span>
+        ${canAdd ? `<span class="cat-actions">
+          <button class="mini-btn" onclick="event.stopPropagation(); quickAddToCat('${c.id}')">+1</button>
+          ${c.id!=='none' ? `<button class="mini-btn del" onclick="event.stopPropagation(); openDeleteCat('${c.id}')">删</button>` : ''}
+        </span>` : ''}
+      </div>`;
+  }).join('');
+}
+function setActiveCat(id){ STATE.activeCat = id; renderCategories(); renderQuads(); }
+
+/* ============ 渲染：迷你日历（左栏底） ============ */
+function renderMiniCal(){
+  const y=STATE.viewYear, m=STATE.viewMonth;
+  document.getElementById('miniMonth').textContent = `${y}年${pad(m+1)}月`;
+  const first = new Date(y,m,1);
+  let offset = first.getDay()-1; if(offset<0) offset=6;
+  const days = new Date(y,m+1,0).getDate();
+  const prevDays = new Date(y,m,0).getDate();
+  const todayStr = today();
+
+  const heads = ['一','二','三','四','五','六','日']
+    .map((d,i)=>`<div class="mini-wk ${i>=5?'weekend':''}">${d}</div>`).join('');
+
+  const cells=[];
+  for(let i=offset-1;i>=0;i--) cells.push({day:prevDays-i, other:true, dateStr:fmt(new Date(y,m-1,prevDays-i))});
+  for(let d=1;d<=days;d++){
+    const ds = fmt(new Date(y,m,d));
+    cells.push({day:d, other:false, dateStr:ds, isToday: ds===todayStr, hasTask: STATE.tasks.some(t=>t.deadline===ds)});
+  }
+  let n=1; while(cells.length<42){ cells.push({day:n, other:true, dateStr:fmt(new Date(y,m+1,n))}); n++; }
+
+  const html = heads + cells.map(c=>{
+    const cls = ['mini-day'];
+    if(c.other) cls.push('other');
+    if(c.isToday) cls.push('today');
+    if(STATE.selectedId){
+      const sel = STATE.tasks.find(t=>t.id===STATE.selectedId);
+      if(sel && sel.deadline===c.dateStr) cls.push('selected');
+    }
+    return `<div class="${cls.join(' ')}" onclick="pickMiniDate('${c.dateStr}')">${c.day}${c.hasTask?'<span class="dot"></span>':''}</div>`;
+  }).join('');
+
+  document.getElementById('miniCal').innerHTML = html;
+}
+function changeMonth(d){
+  let m=STATE.viewMonth+d, y=STATE.viewYear;
+  if(m<0){m=11;y--;} else if(m>11){m=0;y++;}
+  STATE.viewMonth=m; STATE.viewYear=y; renderMiniCal();
+}
+function pickMiniDate(dateStr){
+  // 点迷你日历日期 → 新建当日计划并选中
+  const t = { id:uid(), title:'新建计划', desc:'', cat:'none', quad:'q3', deadline:dateStr, done:false, sub:[], repeat:'none' };
+  STATE.tasks.push(t);
+  selectTask(t.id);
+  renderAll();
+}
+
+/* ============ 渲染：四象限 ============ */
+function renderQuads(){
+  document.getElementById('quadsGrid').innerHTML = QUAD_ORDER.map(key=>{
+    const q = QUADS[key];
+    let tasks = STATE.tasks.filter(t=>t.quad===key);
+    if(STATE.activeCat!=='all') tasks = tasks.filter(t=>t.cat===STATE.activeCat);
+
+    const cards = tasks.map(t=>{
+      const cat = STATE.categories.find(c=>c.id===t.cat);
+      const dl = t.deadline ? t.deadline.slice(5) : '无期限';
+      const oc = t.overdue ? 'overdue' : '';
+      const sel = STATE.selectedId===t.id ? 'selected' : '';
+      return `
+        <div class="task-card ${sel}" onclick="selectTask(${t.id})">
+          <input type="checkbox" class="ck" ${t.done?'checked':''} onclick="event.stopPropagation()" onchange="toggleDone(${t.id})">
+          <div class="task-card-main">
+            <div class="tc-title ${t.done?'done':''}">${t.title}</div>
+            <div class="tc-meta">
+              <span>${cat?cat.emoji+' '+cat.name:''}</span>
+              <span class="${oc}">${t.overdue?'⚠ ':''}📅${dl}</span>
+              ${t.repeat!=='none' ? `<span>🔁</span>` : ''}
+              ${t.sub.length ? `<span>🧩${t.sub.length}</span>` : ''}
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="quad ${key}">
+        <div class="quad-decor">${q.decor}</div>
+        <div class="quad-head">
+          <span class="quad-emoji">${q.emoji}</span>
+          <span class="quad-name">${q.name}</span>
+          <span class="quad-tag">${q.tip} · ${tasks.length}</span>
+        </div>
+        <div class="quad-sub">${q.sub}</div>
+        <div class="quad-tasks">${cards || `<div class="empty-tip">暂无任务</div>`}</div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('inboxCount').textContent = STATE.tasks.filter(t=>t.cat==='none').length;
+}
+
+function toggleDone(id){
+  const t = STATE.tasks.find(x=>x.id===id); t.done = !t.done;
+  renderQuads(); renderDetail();
+}
+
+/* ============ 选中任务 → 右栏 ============ */
+function selectTask(id){
+  STATE.selectedId = id;
+  renderQuads(); renderMiniCal(); renderDetail();
+}
+
+/* ============ 右栏：计划详情 ============ */
+function renderDetail(){
+  const box = document.getElementById('detailContainer');
+  const t = STATE.tasks.find(x=>x.id===STATE.selectedId);
+
+  if(!t){
+    box.innerHTML = `
+      <div class="detail-empty">
+        <div class="big">📝</div>
+        <div>点击任务查看详情</div>
+        <div style="font-size:11px; opacity:.7;">或在顶部输入框添加计划</div>
+      </div>`;
+    return;
+  }
+
+  const q = QUADS[t.quad];
+  const cat = STATE.categories.find(c=>c.id===t.cat);
+
+  box.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <span class="detail-head-emoji">${q.emoji}</span>
+        <div class="detail-head-main">
+          <div class="detail-title-row">
+            <input class="field-input" id="dTitle" value="${escapeAttr(t.title)}" style="font-weight:600; font-size:15px;" oninput="updateField(${t.id},'title',this.value)">
+            <span class="detail-quad-badge" style="background:${cssVar('--q'+t.quad.slice(1))}">${t.quad.toUpperCase()}</span>
+          </div>
+          <div class="detail-sub">${q.name} · ${q.tip}</div>
+        </div>
+        <button class="detail-close" onclick="closeDetail()" title="关闭">×</button>
+      </div>
+
+      <div class="detail-body">
+
+        <div class="field">
+          <label class="field-label">📝 描述</label>
+          <textarea class="field-input" id="dDesc" placeholder="选填：补充说明" oninput="updateField(${t.id},'desc',this.value)">${escapeHtml(t.desc||'')}</textarea>
+        </div>
+
+        <div class="field">
+          <label class="field-label">🧩 子计划</label>
+          <div id="subtaskList">${(t.sub||[]).map((s,i)=>`
+            <div class="subtask-row">
+              <input type="checkbox" class="ck">
+              <input type="text" value="${escapeAttr(s)}" oninput="updateSub(${t.id},${i},this.value)">
+              <button class="mini-btn del" onclick="removeSub(${t.id},${i})">×</button>
+            </div>`).join('')}</div>
+          <button class="add-subtask" onclick="addSub(${t.id})">+ 添加子计划</button>
+        </div>
+
+        <div class="field">
+          <label class="field-label">📅 完成期限</label>
+          <div class="date-row" id="dateRow">
+            <div class="date-chip ${t.deadline===today()?'active':''}" onclick="setDeadline(${t.id},'${today()}')">今天</div>
+            <div class="date-chip ${t.deadline===addDays(today(),1)?'active':''}" onclick="setDeadline(${t.id},'${addDays(today(),1)}')">明天</div>
+            <div class="date-chip" onclick="pickCustomDate(${t.id})">选择日期</div>
+            <div class="date-chip ${t.deadline===''?'active':''}" onclick="setDeadline(${t.id},'')">放入收集箱</div>
+            <input type="date" id="dDate" value="${t.deadline}" style="display:none;" onchange="setDeadline(${t.id},this.value)">
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="attr-row" onclick="toggleAttr('cat')">
+            <span class="attr-label">🗂 计划分类</span>
+            <span class="attr-value">${cat?cat.emoji+' '+cat.name:'无'} <span class="attr-arrow">▶</span></span>
+          </div>
+          <div class="attr-options" id="opt-cat">
+            ${STATE.categories.filter(c=>c.id!=='all').map(c=>
+              `<div class="opt-chip ${t.cat===c.id?'active':''}" onclick="setAttr(${t.id},'cat','${c.id}')">${c.emoji} ${c.name}</div>`
+            ).join('')}
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="attr-row" onclick="toggleAttr('quad')">
+            <span class="attr-label">⚡ 重要优先级</span>
+            <span class="attr-value">${q.emoji} ${q.name} <span class="attr-arrow">▶</span></span>
+          </div>
+          <div class="attr-options" id="opt-quad">
+            ${Object.values(QUADS).map(qq=>
+              `<div class="opt-chip ${qq.key} ${t.quad===qq.key?'active':''}" onclick="setAttr(${t.id},'quad','${qq.key}')">${qq.emoji} ${qq.name}</div>`
+            ).join('')}
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="attr-row" onclick="toggleAttr('repeat')">
+            <span class="attr-label">🔁 重复</span>
+            <span class="attr-value">${repeatLabel(t.repeat)} <span class="attr-arrow">▶</span></span>
+          </div>
+          <div class="attr-options" id="opt-repeat">
+            ${[['none','不重复'],['daily','每天'],['weekly','每周'],['monthly','每月']].map(([k,l])=>
+              `<div class="opt-chip ${t.repeat===k?'active':''}" onclick="setAttr(${t.id},'repeat','${k}')">${l}</div>`
+            ).join('')}
+          </div>
+        </div>
+
+      </div>
+
+      <div class="detail-foot">
+        <button class="btn btn-primary btn-block" onclick="saveDetail()">💾 保存</button>
+        <button class="icon-only" title="删除" onclick="deleteCurrent()">🗑</button>
+        <button class="icon-only" title="更多">⋮</button>
+      </div>
+    </div>`;
+}
+function closeDetail(){ STATE.selectedId = null; renderQuads(); renderMiniCal(); renderDetail(); }
+
+/* 详情交互 */
+function toggleAttr(name){
+  const row = event.currentTarget;
+  const opts = document.getElementById('opt-'+name);
+  const isOpen = opts.classList.contains('show');
+  // 关其他
+  document.querySelectorAll('.attr-options.show').forEach(o=>o.classList.remove('show'));
+  document.querySelectorAll('.attr-row.open').forEach(r=>r.classList.remove('open'));
+  if(!isOpen){ opts.classList.add('show'); row.classList.add('open'); }
+}
+function updateField(id, key, val){
+  const t = STATE.tasks.find(x=>x.id===id); if(!t) return;
+  t[key] = val;
+  if(key==='title' || key==='cat' || key==='quad') renderQuads();
+  if(key==='cat') renderCategories();
+}
+function setAttr(id, key, val){
+  const t = STATE.tasks.find(x=>x.id===id); if(!t) return;
+  t[key] = val;
+  if(key==='quad' && t.deadline && t.deadline<today()) delete t.overdue;
+  renderQuads(); renderCategories(); renderDetail(); renderMiniCal();
+}
+function setDeadline(id, val){
+  const t = STATE.tasks.find(x=>x.id===id); if(!t) return;
+  t.deadline = val;
+  if(val && val<today()) t.overdue = true; else delete t.overdue;
+  renderQuads(); renderDetail(); renderMiniCal();
+}
+function pickCustomDate(id){
+  const inp = document.getElementById('dDate');
+  inp.style.display = 'block'; inp.showPicker ? inp.showPicker() : inp.click();
+}
+function updateSub(id, i, val){
+  const t = STATE.tasks.find(x=>x.id===id); if(t) t.sub[i] = val;
+}
+function addSub(id){
+  const t = STATE.tasks.find(x=>x.id===id); if(!t) return;
+  t.sub.push(''); renderDetail();
+}
+function removeSub(id, i){
+  const t = STATE.tasks.find(x=>x.id===id); if(!t) return;
+  t.sub.splice(i,1); renderDetail(); renderQuads();
+}
+function saveDetail(){
+  // live 编辑模式下保存按钮：提示已保存
+  const tip = document.createElement('div');
+  tip.textContent = '✓ 已保存';
+  tip.style.cssText = 'position:fixed;bottom:60px;right:340px;background:var(--ob-accent);color:#fff;padding:6px 14px;border-radius:6px;font-size:12px;z-index:2000;box-shadow:0 4px 12px rgba(124,58,237,.4);';
+  document.body.appendChild(tip);
+  setTimeout(()=>tip.remove(), 1200);
+}
+function deleteCurrent(){
+  if(!confirm('确定删除该计划？')) return;
+  STATE.tasks = STATE.tasks.filter(t=>t.id!==STATE.selectedId);
+  STATE.selectedId = null;
+  renderAll();
+}
+
+/* ============ 顶部输入条快速添加 ============ */
+function quickAddFromBar(){
+  const inp = document.getElementById('quickInput');
+  const title = inp.value.trim();
+  if(!title) return;
+  const t = { id:uid(), title, desc:'', cat:'none', quad:'q3', deadline:'', done:false, sub:[], repeat:'none' };
+  STATE.tasks.push(t);
+  inp.value = '';
+  selectTask(t.id);
+  renderAll();
+}
+function quickAddToCat(catId){
+  const title = prompt('新建计划标题：');
+  if(!title) return;
+  const t = { id:uid(), title, desc:'', cat:catId, quad:'q3', deadline:'', done:false, sub:[], repeat:'none' };
+  STATE.tasks.push(t);
+  selectTask(t.id);
+  renderAll();
+}
+
+/* ============ 分类弹窗 ============ */
+function openCategoryModal(){
+  document.getElementById('catModalTitle').textContent = '新建分类';
+  document.getElementById('catModalBody').innerHTML = `
+    <div class="field">
+      <label class="field-label">分类名称</label>
+      <input class="field-input" id="newCatName" placeholder="例如：健身" style="background:var(--ob-bg);">
+    </div>
+    <div class="field" style="margin-bottom:0;">
+      <label class="field-label">选择图标</label>
+      <div class="date-row" id="emojiPick">
+        ${['🎯','💪','💰','🎸','✈️','🐾','🍕','💊'].map((e,i)=>`<div class="opt-chip ${i===0?'active':''}" data-emoji="${e}" onclick="pickEmoji('${e}')">${e}</div>`).join('')}
+      </div>
+    </div>`;
+  document.getElementById('catModalFoot').innerHTML = `<button class="btn" onclick="closeCatModal()">取消</button><button class="btn btn-primary" onclick="createCategory()">确定</button>`;
+  STATE._newEmoji='🎯';
+  document.getElementById('catMask').classList.add('show');
+}
+function pickEmoji(e){
+  STATE._newEmoji=e;
+  document.querySelectorAll('#emojiPick .opt-chip').forEach(c=>c.classList.toggle('active', c.dataset.emoji===e));
+}
+function createCategory(){
+  const name = document.getElementById('newCatName').value.trim();
+  if(!name){ alert('请输入分类名称'); return; }
+  STATE.categories.splice(STATE.categories.length-1, 0, { id:'c'+uid(), name, emoji:STATE._newEmoji||'🏷️' });
+  // 注：插在「全部」之后、末尾学习之后调整——这里简化为 push 到 all/none 之后
+  closeCatModal(); renderAll();
+}
+function openDeleteCat(id){
+  const c = STATE.categories.find(x=>x.id===id);
+  const count = STATE.tasks.filter(t=>t.cat===id).length;
+  document.getElementById('catModalTitle').textContent = '删除分类';
+  document.getElementById('catModalBody').innerHTML = `
+    <p style="margin-bottom:12px; font-size:13px;">即将删除分类「<b>${c.emoji} ${c.name}</b>」，该分类下有 <b>${count}</b> 个任务：</p>
+    <label class="radio-row active" data-dm="keep">
+      <input type="radio" name="delMode" value="keep" checked>
+      <div><div class="r-title">仅删除分类</div><div class="r-desc">任务自动转为「无分类」</div></div>
+    </label>
+    <label class="radio-row" data-dm="all">
+      <input type="radio" name="delMode" value="all">
+      <div><div class="r-title">删除分类 + 同步删除分类内全部计划</div><div class="r-desc">共 ${count} 个任务将被一并删除</div></div>
+    </label>`;
+  document.getElementById('catModalFoot').innerHTML = `<button class="btn" onclick="closeCatModal()">取消</button><button class="btn btn-danger" onclick="confirmDeleteCat('${id}')">确定</button>`;
+  document.querySelectorAll('#catModalBody .radio-row').forEach(r=>{
+    r.addEventListener('click', ()=>{
+      document.querySelectorAll('#catModalBody .radio-row').forEach(x=>x.classList.remove('active'));
+      r.classList.add('active'); r.querySelector('input').checked=true;
+    });
+  });
+  document.getElementById('catMask').classList.add('show');
+}
+function confirmDeleteCat(id){
+  const mode = document.querySelector('input[name=delMode]:checked').value;
+  if(mode==='keep') STATE.tasks.forEach(t=>{ if(t.cat===id) t.cat='none'; });
+  else STATE.tasks = STATE.tasks.filter(t=>t.cat!==id);
+  STATE.categories = STATE.categories.filter(c=>c.id!==id);
+  if(STATE.activeCat===id) STATE.activeCat='all';
+  closeCatModal(); renderAll();
+}
+function closeCatModal(){ document.getElementById('catMask').classList.remove('show'); }
+
+/* ============ 工具函数 ============ */
+function repeatLabel(r){ return {none:'无',daily:'每天',weekly:'每周',monthly:'每月'}[r] || '无'; }
+function escapeHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escapeAttr(s){ return escapeHtml(s).replace(/"/g,'&quot;'); }
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+/* ============ 总渲染 ============ */
+function renderAll(){ renderCategories(); renderMiniCal(); renderQuads(); renderDetail(); }
+renderAll();
+</script>
+</body>
+</html>

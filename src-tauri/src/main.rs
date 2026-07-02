@@ -70,6 +70,7 @@ pub fn run() {
             // 行级就地写入（inline-crud）
             commands::library::update_line,
             commands::library::delete_line,
+            commands::library::insert_line_after,
             commands::library::append_bullet,
             commands::library::patch_frontmatter,
             commands::library::set_tag,

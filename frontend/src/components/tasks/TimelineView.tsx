@@ -8,6 +8,7 @@ import { Badge, Empty, Tag, Tooltip, Typography } from "antd";
 import dayjs from "dayjs";
 import type { Task, NoteMeta } from "../../types";
 import TaskCard from "./TaskCard";
+import AppIcon from "../../components/AppIcon";
 
 const { Text } = Typography;
 
@@ -128,7 +129,7 @@ export default function TimelineView({
                           </div>
                           {dayTasks.slice(0, 8).map((t) => (
                             <div key={t.id} style={{ fontSize: 12, marginBottom: 2, display: "flex", gap: 4 }}>
-                              {t.done ? "☑" : "☐"} {t.text}
+                              <AppIcon name={t.done ? "check" : "border"} size={12} color={t.done ? "#52c41a" : undefined} /> {t.text}
                             </div>
                           ))}
                           {dayTasks.length > 8 && (
@@ -158,7 +159,7 @@ export default function TimelineView({
                       {dayTasks.length > 3 && (
                         <Badge
                           count={dayTasks.length}
-                          style={{ backgroundColor: hasOverdue ? "#ef4444" : "#7c3aed" }}
+                          style={{ backgroundColor: hasOverdue ? "#ef4444" : "var(--ob-accent)" }}
                           overflowCount={99}
                         />
                       )}

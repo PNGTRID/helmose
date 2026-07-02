@@ -1,0 +1,11 @@
+/* AppIcon 自定义 SVG 通道的旋转动画。
+   antd 内置图标走原生 spin prop，不经过此 keyframes；
+   仅 svg 通道（自定义 AI 图标）需要手动旋转时使用。 */
+@keyframes helmose-icon-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

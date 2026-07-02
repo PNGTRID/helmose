@@ -11,7 +11,7 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
-/* 主线项目紫色左条（与看板主线 Tag 视觉呼应） */
+/* 主线项目海蓝左条（与看板主线 Tag 视觉呼应） */
 .pv-grid-card.pv-mainline::before {
   content: "";
   position: absolute;
@@ -19,7 +19,7 @@
   top: 0;
   bottom: 0;
   width: 3px;
-  background: #722ed1;
+  background: var(--ob-accent);
 }
 
 .pv-grid-card .pv-grid-name {

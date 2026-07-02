@@ -437,7 +437,8 @@ pub fn toggle_task_inner(
         ));
     }
     lines[idx] = if done {
-        lines[idx].replace("[ ]", "[x]")
+        // High#3：doing([/]) 勾选也算完成 → [x]（修 doing 勾选无效；与 set_task_status_inner 三态口径一致）
+        lines[idx].replace("[ ]", "[x]").replace("[/]", "[x]")
     } else {
         lines[idx].replace("[x]", "[ ]").replace("[X]", "[ ]")
     };
@@ -526,10 +527,14 @@ fn validate_task_status(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// task urgency 白名单（high/mid/low）。命令壳入口 + 单元测试共用。
+/// task urgency 白名单（三态：high/low 显式 + "" 清空；mid 仅前端 due_date 派生，不入 bullet）。
+/// 命令壳入口 + 单元测试共用。非法值（含 mid）→ Err，防前端误传 mid 静默清空 🔥（B1/S1）。
 fn validate_task_urgency(s: &str) -> Result<(), String> {
-    if !["high", "mid", "low"].contains(&s) {
-        return Err(format!("非法 urgency 值: {}（必须 high/mid/low）", s));
+    if !["high", "low", ""].contains(&s) {
+        return Err(format!(
+            "非法 urgency 值: {}（必须 high/low/空串；mid 仅前端派生，后端不接受）",
+            s
+        ));
     }
     Ok(())
 }
@@ -538,6 +543,14 @@ fn validate_task_urgency(s: &str) -> Result<(), String> {
 fn validate_task_priority(p: i32) -> Result<(), String> {
     if !(0..=3).contains(&p) {
         return Err(format!("非法 priority 值: {}（必须 0-3）", p));
+    }
+    Ok(())
+}
+
+/// marking_style 白名单（"helmose"|"obsidian"）。命令壳入口校验，防前端误传非法值静默兜底。
+fn validate_marking_style(s: &str) -> Result<(), String> {
+    if !["helmose", "obsidian"].contains(&s) {
+        return Err(format!("非法 marking_style 值: {}（必须 helmose/obsidian）", s));
     }
     Ok(())
 }
@@ -632,27 +645,34 @@ pub fn set_task_status_inner(
     save_lines(note_id, &le.full, le.lines, le.trailing_nl, db)
 }
 
-/// 改任务优先级（priority：0-3，0 = 清空 ⭐）。
-/// 在行尾按 priority 数补 ⭐（0=删全部 ⭐；1-3=补对应数）。先剥离旧 ⭐ 再补新数。
+/// 改任务优先级（priority：0-3，0 = 清空标记）。
+/// 写入格式由「原 bullet 已有格式嗅探」优先决定（S2）：含 ⏫🔼🔽 → obsidian；含 priority:N → helmose；
+/// 否则（⭐ 老/无标记）→ 落到传入 marking_style。保证单 bullet 风格稳定（切全局风格不污染存量任务）。
+/// 先剥离所有旧 priority 标记（三格式含越界脏值，单一源 strip_priority_marks）再补新标记。
 pub fn set_task_priority_inner(
     note_id: &str,
     source_line: i64,
     priority: i32,
+    marking_style: &str,
     db: &Database,
 ) -> Result<NoteContent, String> {
     let mut le = line_for_edit(note_id, source_line, db)?;
     let idx = (source_line - 1) as usize;
 
-    // 剥离旧 ⭐（复用 indexer::tasks 的 pub 正则，单一源；trim_end 保留 bullet 缩进）
-    let cleaned = tasks::RE_PRIORITY
-        .replace_all(&le.line, "")
-        .trim_end()
-        .to_string();
+    // 写侧风格 sniff：原行已有明确格式 → 沿用；否则回落 marking_style（S2，保单 bullet 风格稳定）
+    let style = tasks::sniff_priority_style(&le.line).unwrap_or(marking_style);
+    // 剥离所有 priority 标记（三格式含越界脏值，单一源；trim_end 保留 bullet 缩进）
+    let cleaned = tasks::strip_priority_marks(&le.line);
 
-    let n = priority.clamp(0, 3);
+    let n = priority.clamp(0, tasks::PRI_HIGH);
     let new_line = if n > 0 {
-        let stars = "⭐".repeat(n as usize);
-        format!("{} {}", cleaned, stars)
+        // style 来自 sniff 或命令壳校验后的 marking_style，必为 helmose/obsidian（inner 兜底防御：判等 obsidian 否则 helmose）
+        let mark = if style == "obsidian" {
+            tasks::pri_to_obsidian_emoji(n).to_string()
+        } else {
+            format!("priority:{}", n)
+        };
+        format!("{} {}", cleaned, mark)
     } else {
         cleaned
     };
@@ -661,27 +681,35 @@ pub fn set_task_priority_inner(
     save_lines(note_id, &le.full, le.lines, le.trailing_nl, db)
 }
 
-/// 改任务紧急度（urgency：high=加 🔥，其他=删 🔥）。
-/// 派生（按 due_date 推导）只在前端，本命令只对手动 🔥 增删。
+/// 改任务紧急度（三态：high/low 显式 + ""/其它 清空）。manual override 双向（Blocker #1 方案 B）。
+/// marking_style 决定 high 写入格式："obsidian" → 🔥；其他 → urgency:high（helmose 文字，默认）。
+/// low 两模式统一 urgency:low 文字（Obsidian Tasks 插件无 low emoji 对应，文字互通）。
+/// 先剥离所有旧 urgency 标记（🔥 / urgency:high|low 两格式，单一源 strip_urgency_marks）再按值补。
 pub fn set_task_urgency_inner(
     note_id: &str,
     source_line: i64,
     urgency: &str,
+    marking_style: &str,
     db: &Database,
 ) -> Result<NoteContent, String> {
     let mut le = line_for_edit(note_id, source_line, db)?;
     let idx = (source_line - 1) as usize;
 
-    // 先剥 🔥（复用 indexer::tasks 的 pub 正则，单一源），再按 high 决定补不补
-    let cleaned = tasks::RE_URGENCY_HIGH
-        .replace_all(&le.line, "")
-        .trim_end()
-        .to_string();
+    // 剥离所有 urgency 标记（🔥 + urgency:text 两格式，单一源 strip_urgency_marks）
+    let cleaned = tasks::strip_urgency_marks(&le.line);
 
-    let new_line = if urgency == "high" {
-        format!("{} 🔥", cleaned)
-    } else {
-        cleaned
+    let new_line = match urgency {
+        "high" => {
+            // obsidian 模式 → 🔥；其他 → helmose 文字 urgency:high
+            let mark = if marking_style == "obsidian" {
+                "🔥"
+            } else {
+                "urgency:high"
+            };
+            format!("{} {}", cleaned, mark)
+        }
+        "low" => format!("{} urgency:low", cleaned), // 显式不紧急：两模式统一文字（obsidian 无 low emoji）
+        _ => cleaned, // "" 或非法兜底 = 清空（删所有 urgency 标记，回到未设派生）
     };
 
     le.lines[idx] = new_line;
@@ -702,32 +730,40 @@ pub fn set_task_status(
     set_task_status_inner(&note_id, source_line, &status, db.inner())
 }
 
-/// 改任务优先级（命令壳）。四象限拖拽 / 行内 ⭐ 切换触发。
+/// 改任务优先级（命令壳）。四象限拖拽 / 行内优先级切换触发。
+/// marking_style: 前端标记风格设置（"helmose"|"obsidian"），None 默认 "helmose"（独立自建定位）。
 #[tauri::command]
 pub fn set_task_priority(
     note_id: String,
     source_line: i64,
     priority: i32,
+    marking_style: Option<String>,
     db: State<'_, Database>,
 ) -> Result<NoteContent, String> {
     // 入口显式范围校验：拒绝非法 priority（防 inner clamp 静默兜底成功）
     validate_task_priority(priority)?;
-    tracing::info!(note_id = %note_id, source_line, priority, "set_task_priority 写回");
-    set_task_priority_inner(&note_id, source_line, priority, db.inner())
+    let style = marking_style.as_deref().unwrap_or("helmose");
+    validate_marking_style(style)?;
+    tracing::info!(note_id = %note_id, source_line, priority, style = %style, "set_task_priority 写回");
+    set_task_priority_inner(&note_id, source_line, priority, style, db.inner())
 }
 
-/// 改任务紧急度（命令壳）。四象限拖拽 / 行内 🔥 切换触发。
+/// 改任务紧急度（命令壳）。四象限拖拽 / 行内紧急切换触发。
+/// marking_style: 前端标记风格设置（"helmose"|"obsidian"），None 默认 "helmose"（独立自建定位）。
 #[tauri::command]
 pub fn set_task_urgency(
     note_id: String,
     source_line: i64,
     urgency: String,
+    marking_style: Option<String>,
     db: State<'_, Database>,
 ) -> Result<NoteContent, String> {
     // 入口显式白名单校验：拒绝非法 urgency（防 inner 兜底静默成功）
     validate_task_urgency(&urgency)?;
-    tracing::info!(note_id = %note_id, source_line, urgency = %urgency, "set_task_urgency 写回");
-    set_task_urgency_inner(&note_id, source_line, &urgency, db.inner())
+    let style = marking_style.as_deref().unwrap_or("helmose");
+    validate_marking_style(style)?;
+    tracing::info!(note_id = %note_id, source_line, urgency = %urgency, style = %style, "set_task_urgency 写回");
+    set_task_urgency_inner(&note_id, source_line, &urgency, style, db.inner())
 }
 
 /// 删除笔记核心逻辑：**软删除**——移到 <vault>/.helmose/trash/（可恢复），
@@ -1013,6 +1049,52 @@ pub fn delete_line(
     db: State<'_, Database>,
 ) -> Result<NoteContent, String> {
     delete_line_inner(&note_id, source_line, db.inner())
+}
+
+/// 通用行级插入：在 1-based source_line 对应行**之后**插入新行 text → 复用 save（写前已备份）。
+/// 用于子计划新增（在父任务行后插入缩进 checkbox 子任务，indexer 按「最近非缩进父」归属）。
+/// text 为完整新行（含缩进 + bullet 前缀，前端按场景拼）。
+pub fn insert_line_after_inner(
+    note_id: &str,
+    after_line: i64,
+    text: &str,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    // 入口校验：与 line_for_edit 同口径拒绝 after_line<=0，避免 (0-1) as usize 绕回 usize::MAX 的隐式侥幸（H2）
+    if after_line <= 0 {
+        return Err(format!(
+            "note {} after_line {} 不合法（必须 >0；聚合 section 任务不支持插入）",
+            note_id, after_line
+        ));
+    }
+    let full = read_full(note_id, db)?;
+    let body = body_of(&full);
+    let mut lines: Vec<String> = body.lines().map(String::from).collect();
+    let idx = (after_line - 1) as usize;
+    if idx >= lines.len() {
+        return Err(format!(
+            "note {} after_line {} 越界（正文共 {} 行）",
+            note_id, after_line, lines.len()
+        ));
+    }
+    lines.insert(idx + 1, text.to_string());
+    let mut new_body = lines.join("\n");
+    if body.ends_with('\n') {
+        new_body.push('\n');
+    }
+    let new_full = reassemble(&full, &new_body);
+    save_note_content_inner(note_id, &new_full, db)
+}
+
+/// 行级插入命令壳（子计划新增触发：在父任务行后插缩进 checkbox 子任务）。
+#[tauri::command]
+pub fn insert_line_after(
+    note_id: String,
+    after_line: i64,
+    text: String,
+    db: State<'_, Database>,
+) -> Result<NoteContent, String> {
+    insert_line_after_inner(&note_id, after_line, &text, db.inner())
 }
 
 /// 取标题行 `^#{1,6}` 的层级（1-6）；非标题或空标题 → None。
@@ -1952,6 +2034,58 @@ mod tests {
         assert_eq!(done2, 0, "取消后 done 应回 0");
     }
 
+    #[test]
+    fn toggle_task_inner_doing勾选变done() {
+        use crate::commands::index::index_vault_inner;
+        let (_tmp, vid, vault_dir, db) = setup_lib();
+        std::fs::write(vault_dir.join("t.md"), "# T\n\n- [/] 进行中\n").unwrap();
+        index_vault_inner(&vid, &db).unwrap();
+
+        let note_id: String = db
+            .sqlite()
+            .query_row("SELECT id FROM notes WHERE file_name='t.md'", &[], |r| r.get::<_, String>(0))
+            .unwrap()
+            .unwrap();
+        let line: i64 = db
+            .sqlite()
+            .query_row(
+                "SELECT source_line FROM tasks WHERE text='进行中'",
+                &[],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap();
+        let cur_id = || -> String {
+            db.sqlite()
+                .query_row("SELECT id FROM notes WHERE file_name='t.md'", &[], |r| r.get::<_, String>(0))
+                .unwrap()
+                .unwrap()
+        };
+
+        // High#3：doing([/]) 勾选（done=true）→ 应变 [x]（修前：[/] 不匹配 [ ]，行不变，勾选无效）
+        let nc = toggle_task_inner(&note_id, line, true, &db).unwrap();
+        assert!(
+            nc.raw_content.contains("- [x] 进行中"),
+            "doing 勾选应变 [x]：{}",
+            nc.raw_content
+        );
+        let done: i64 = db
+            .sqlite()
+            .query_row("SELECT done FROM tasks WHERE text='进行中'", &[], |r| r.get(0))
+            .unwrap()
+            .unwrap_or(0);
+        assert_eq!(done, 1, "doing 勾选后 tasks.done 应同步为 1");
+
+        // 取消勾选 → [x] 回 [ ]（doing 历史不可恢复，回 todo，接受）
+        toggle_task_inner(&cur_id(), line, false, &db).unwrap();
+        let done2: i64 = db
+            .sqlite()
+            .query_row("SELECT done FROM tasks WHERE text='进行中'", &[], |r| r.get(0))
+            .unwrap()
+            .unwrap_or(1);
+        assert_eq!(done2, 0, "取消勾选 done 应回 0");
+    }
+
     /// M2：toggle 重复任务推进。带 🔁 every week + 📅 的任务 toggle(done=true) →
     /// due 推进 7 天 + 仍 unchecked（[ ] 保持）。
     #[test]
@@ -2118,6 +2252,28 @@ mod tests {
         let nc = delete_line_inner(&note_id, 4, &db).expect("应删成功");
         assert!(nc.raw_content.contains("任务B"), "任务B 应保留");
         assert!(!nc.raw_content.contains("任务A"), "任务A 应已删除");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn insert_line_after_在父任务后插子任务() {
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 父任务\n- [ ] 其他\n");
+        // 父任务在第 4 行 → 在其后插入缩进子任务
+        let nc = insert_line_after_inner(&note_id, 4, "  - [ ] 子任务A", &db).expect("应插入成功");
+        let lines: Vec<&str> = nc.raw_content.lines().collect();
+        let parent_idx = lines.iter().position(|l| l.contains("父任务")).unwrap();
+        assert_eq!(
+            lines[parent_idx + 1].trim_start(),
+            "- [ ] 子任务A",
+            "子任务应紧跟父任务"
+        );
+        assert!(lines[parent_idx + 2].contains("其他"), "其他任务应被挤到子任务后");
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("子任务A"), "vault 原文应含新子任务");
+        // 越界
+        let err = insert_line_after_inner(&cur_note_id(&db), 999, "x", &db);
+        assert!(err.is_err(), "越界应 Err");
         let _ = std::fs::remove_dir_all(&vault_dir);
     }
 
@@ -2331,36 +2487,47 @@ mod tests {
     }
 
     #[test]
-    fn set_task_priority_inner_补星与清空() {
+    fn set_task_priority_inner_helmose模式_写priorityN与清空() {
         let (_tmp, vault_dir, db, note_id) =
             setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
         let line = source_line_of(&db, "任务");
-        // priority=2 → 补 ⭐⭐
-        set_task_priority_inner(&note_id, line, 2, &db).unwrap();
+        // priority=2 → 写 priority:2（helmose 文字标准，默认）
+        set_task_priority_inner(&note_id, line, 2, "helmose", &db).unwrap();
         let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
-        assert!(on_disk.contains("- [ ] 任务 ⭐⭐"), "应补 2 颗 ⭐");
+        assert!(on_disk.contains("- [ ] 任务 priority:2"), "helmose 应写 priority:2");
 
-        // priority=0 → 清空所有 ⭐
-        set_task_priority_inner(&cur_line_note_id(&db), line, 0, &db).unwrap();
+        // priority=0 → 清空 priority 标记
+        set_task_priority_inner(&cur_line_note_id(&db), line, 0, "helmose", &db).unwrap();
         let on_disk2 = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
-        assert!(!on_disk2.contains("⭐"), "priority=0 应清空所有 ⭐");
+        assert!(!on_disk2.contains("priority:"), "priority=0 应清空 priority 标记");
         let _ = std::fs::remove_dir_all(&vault_dir);
     }
 
     #[test]
-    fn set_task_urgency_inner_加火与删火() {
+    fn set_task_urgency_inner_helmose模式_三态写urgency() {
         let (_tmp, vault_dir, db, note_id) =
             setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
         let line = source_line_of(&db, "任务");
-        // urgency=high → 加 🔥
-        set_task_urgency_inner(&note_id, line, "high", &db).unwrap();
+        // urgency=high → 写 urgency:high（helmose 文字标准，默认）
+        set_task_urgency_inner(&note_id, line, "high", "helmose", &db).unwrap();
         let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
-        assert!(on_disk.contains("- [ ] 任务 🔥"), "应加 🔥");
+        assert!(
+            on_disk.contains("- [ ] 任务 urgency:high"),
+            "helmose 应写 urgency:high"
+        );
 
-        // urgency=low → 删 🔥
-        set_task_urgency_inner(&cur_line_note_id(&db), line, "low", &db).unwrap();
+        // urgency=low → 写 urgency:low（显式不紧急，三态 manual override 双向，非删标记）
+        set_task_urgency_inner(&cur_line_note_id(&db), line, "low", "helmose", &db).unwrap();
         let on_disk2 = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
-        assert!(!on_disk2.contains("🔥"), "low 应删 🔥");
+        assert!(
+            on_disk2.contains("- [ ] 任务 urgency:low"),
+            "low 应写 urgency:low（显式不紧急，区别于未设）"
+        );
+
+        // urgency="" → 清空（删所有 urgency 标记，回未设由前端 due_date 派生）
+        set_task_urgency_inner(&cur_line_note_id(&db), line, "", "helmose", &db).unwrap();
+        let on_disk3 = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(!on_disk3.contains("urgency:"), "空串应清空 urgency 标记");
         let _ = std::fs::remove_dir_all(&vault_dir);
     }
 
@@ -2425,16 +2592,30 @@ mod tests {
         assert!(validate_task_status("done\n").is_err(), "带换行应拒");
     }
 
-    /// set_task_urgency 命令壳入口拒绝非法 urgency。
+    /// set_task_urgency 命令壳入口拒绝非法 urgency（mid 仅前端派生，后端拒绝，B1/S1）。
     #[test]
     fn validate_task_urgency_拒绝非法值() {
         assert!(validate_task_urgency("high").is_ok());
-        assert!(validate_task_urgency("mid").is_ok());
         assert!(validate_task_urgency("low").is_ok());
+        assert!(validate_task_urgency("").is_ok(), "空串=清空语义，应通过");
+        // mid 仅前端 due_date 派生，后端拒绝（防误传 mid 静默清空 🔥，B1/S1）
+        let mid_err = validate_task_urgency("mid").expect_err("mid 应被后端拒绝");
+        assert!(mid_err.contains("mid"), "Err 应说明 mid 不接受: {}", mid_err);
         let err = validate_task_urgency("urgent").expect_err("非法 urgency 应 Err");
         assert!(err.contains("非法 urgency"), "Err 文案应含「非法 urgency」: {}", err);
         assert!(err.contains("urgent"), "Err 应含原值");
         assert!(validate_task_urgency("HIGH").is_err(), "大写应拒");
+    }
+
+    /// marking_style 白名单校验（防前端误传非法值静默兜底 helmose）。
+    #[test]
+    fn validate_marking_style_白名单() {
+        assert!(validate_marking_style("helmose").is_ok());
+        assert!(validate_marking_style("obsidian").is_ok());
+        let err = validate_marking_style("OB").expect_err("非法 style 应 Err");
+        assert!(err.contains("非法 marking_style"), "{}", err);
+        assert!(validate_marking_style("Helmose").is_err(), "大写应拒");
+        assert!(validate_marking_style("").is_err(), "空串应拒");
     }
 
     /// set_task_priority 命令壳入口拒绝越界 priority（替换旧 clamp 静默兜底）。
@@ -2455,20 +2636,102 @@ mod tests {
     }
 
     /// set_task_priority_inner 仍保留 clamp 防御（review 允许 inner 防御性 clamp）。
-    /// 锁定行为：即便绕过命令壳传 priority=99，inner 也不 panic、不写越界 ⭐，按 clamp(0,3)=3 兜底。
-    /// 这是 inner 的最后一道防线（命令壳已 Err 拦截，但 inner 自身仍要稳）。
+    /// 锁定行为：即便绕过命令壳传 priority=99，inner 也不 panic、按 clamp(0,3)=3 兜底。
     #[test]
     fn set_task_priority_inner_越界clamp防御() {
         let (_tmp, vault_dir, db, note_id) =
             setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
         let line = source_line_of(&db, "任务");
-        // priority=99 → inner clamp 到 3（防御性兜底，不 panic）
-        let nc = set_task_priority_inner(&note_id, line, 99, &db).expect("inner 应 clamp 不 Err");
+        // priority=99 → inner clamp 到 3（防御性兜底，不 panic）；helmose 默认写 priority:3
+        let nc = set_task_priority_inner(&note_id, line, 99, "helmose", &db)
+            .expect("inner 应 clamp 不 Err");
         assert!(
-            nc.raw_content.matches('⭐').count() == 3,
-            "priority=99 应 clamp 到 3 颗 ⭐，实际 raw: {}",
+            nc.raw_content.contains("priority:3"),
+            "priority=99 应 clamp 到 priority:3，实际 raw: {}",
             nc.raw_content
         );
         let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    // ============ P2：marking_style 双模式 + 跨格式剥离 ============
+
+    #[test]
+    fn set_task_priority_inner_obsidian模式_写箭头() {
+        // obsidian 模式 priority 3/2/1 → ⏫/🔼/🔽（Obsidian Tasks 标准）
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
+        let line = source_line_of(&db, "任务");
+        set_task_priority_inner(&note_id, line, 3, "obsidian", &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("⏫"), "obsidian priority=3 → ⏫");
+        assert!(!on_disk.contains("priority:"), "obsidian 模式不写文字标记");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_task_priority_inner_切风格剥旧标记() {
+        // 已有老 ⭐⭐ → set priority:2 helmose → 应剥 ⭐ 写 priority:2（切风格不残留）
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务 ⭐⭐\n");
+        let line = source_line_of(&db, "任务");
+        set_task_priority_inner(&note_id, line, 2, "helmose", &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("priority:2"), "应写 priority:2");
+        assert!(!on_disk.contains("⭐"), "应剥旧 ⭐ 标记（切风格不残留）");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_task_urgency_inner_obsidian模式_写火() {
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
+        let line = source_line_of(&db, "任务");
+        set_task_urgency_inner(&note_id, line, "high", "obsidian", &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("🔥"), "obsidian urgency=high → 🔥");
+        assert!(!on_disk.contains("urgency:"), "obsidian 模式不写文字标记");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn set_task_priority_inner_非法style兜底helmose() {
+        // marking_style 非法值（如 "xyz"）兜底为 helmose 文字（防御性）
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
+        let line = source_line_of(&db, "任务");
+        set_task_priority_inner(&note_id, line, 2, "xyz", &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(on_disk.contains("priority:2"), "非法 style 应兜底 helmose 文字");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    /// S2：写侧嗅探原 bullet 格式 → 原行 priority:N 即便传 obsidian style 也保留 helmose 文字。
+    /// 保单 bullet 风格稳定（切全局风格不污染存量任务，符合「切风格不影响存量」铁律）。
+    #[test]
+    fn set_task_priority_inner_嗅探原格式_不被全局风格覆盖() {
+        // 原 helmose 行（priority:2）→ 传 obsidian 改 priority=3 → 应仍写 priority:3（不转 ⏫）
+        let (_tmp, vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务 priority:2\n");
+        let line = source_line_of(&db, "任务");
+        set_task_priority_inner(&note_id, line, 3, "obsidian", &db).unwrap();
+        let on_disk = std::fs::read_to_string(vault_dir.join("n.md")).unwrap();
+        assert!(
+            on_disk.contains("priority:3"),
+            "原 helmose 格式应保留，写 priority:3"
+        );
+        assert!(!on_disk.contains('⏫'), "不应被全局 obsidian 覆盖为 emoji");
+        let _ = std::fs::remove_dir_all(&vault_dir);
+    }
+
+    /// H2：insert_line_after 入口拒绝 after_line<=0（不再靠 usize::MAX 侥幸兜底）。
+    #[test]
+    fn insert_line_after_inner_拒绝非正行号() {
+        let (_tmp, _vault_dir, db, note_id) =
+            setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
+        let err = insert_line_after_inner(&note_id, 0, "- [ ] 子", &db).expect_err("after_line=0 应 Err");
+        assert!(err.contains("不合法"), "应拒绝 after_line<=0: {}", err);
+        let err2 = insert_line_after_inner(&note_id, -3, "- [ ] 子", &db).expect_err("负数应 Err");
+        assert!(err2.contains("不合法"));
+        let _ = std::fs::remove_dir_all(&_vault_dir);
     }
 }

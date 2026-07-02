@@ -8,44 +8,101 @@ import {
   priorityToValue,
   slugify,
 } from "./quickAdd";
+import { useMarkingStyleStore } from "../stores/markingStyle";
 
 describe("buildTaskBullet", () => {
+  // —— helmose 文字标准（默认，独立自建定位）——
+
   it("仅文本：单行 [ ] 任务", () => {
-    expect(buildTaskBullet("写周报")).toBe("- [ ] 写周报");
+    expect(buildTaskBullet({ text: "写周报" })).toBe("- [ ] 写周报");
   });
 
-  it("带 dayjs dueDate：追加 📅 YYYY-MM-DD", () => {
+  it("helmose 模式：due: 文字标记", () => {
     const d = dayjs("2026-07-01");
-    expect(buildTaskBullet("写周报", d)).toBe("- [ ] 写周报 📅 2026-07-01");
+    expect(buildTaskBullet({ text: "写周报", dueDate: d })).toBe("- [ ] 写周报 due:2026-07-01");
+    expect(buildTaskBullet({ text: "写周报", dueDate: "2026-07-01" })).toBe("- [ ] 写周报 due:2026-07-01");
   });
 
-  it("带字符串 dueDate", () => {
-    expect(buildTaskBullet("写周报", "2026-07-01")).toBe("- [ ] 写周报 📅 2026-07-01");
+  it("helmose 模式：urgency:high 文字", () => {
+    expect(buildTaskBullet({ text: "急活", urgency: "high" })).toBe("- [ ] 急活 urgency:high");
   });
 
-  it("带 high urgency：追加 🔥", () => {
-    expect(buildTaskBullet("急活", null, "high")).toBe("- [ ] 急活 🔥");
+  it("mid/未设 不追加标记（派生）；low 显式追加 urgency:low（三态 Blocker #1 方案 B）", () => {
+    expect(buildTaskBullet({ text: "普通", urgency: "mid" })).toBe("- [ ] 普通"); // mid 仅派生，不入 bullet
+    expect(buildTaskBullet({ text: "普通", urgency: "" })).toBe("- [ ] 普通"); // 未设，不入 bullet
+    expect(buildTaskBullet({ text: "普通", urgency: "low" })).toBe("- [ ] 普通 urgency:low"); // 显式不紧急
   });
 
-  it("带 mid/low urgency：不追加 emoji", () => {
-    expect(buildTaskBullet("普通", null, "mid")).toBe("- [ ] 普通");
-    expect(buildTaskBullet("普通", null, "low")).toBe("- [ ] 普通");
+  it("helmose 模式：priority:N 文字（3=最高）", () => {
+    expect(buildTaskBullet({ text: "重要", priority: 3 })).toBe("- [ ] 重要 priority:3");
+    expect(buildTaskBullet({ text: "中", priority: 1 })).toBe("- [ ] 中 priority:1");
+  });
+
+  it("helmose 模式：repeat:X 文字", () => {
+    expect(buildTaskBullet({ text: "周报", repeatRule: "week" })).toBe("- [ ] 周报 repeat:week");
   });
 
   it("带 projectName：追加 #project:{name}", () => {
-    expect(buildTaskBullet("任务", null, null, "Helmose")).toBe(
+    expect(buildTaskBullet({ text: "任务", projectName: "Helmose" })).toBe(
       "- [ ] 任务 #project:Helmose"
     );
   });
 
-  it("全参数组合：📅 + 🔥 + #project", () => {
-    expect(buildTaskBullet("v0.2 上线", "2026-07-01", "high", "Helmose")).toBe(
-      "- [ ] v0.2 上线 📅 2026-07-01 🔥 #project:Helmose"
-    );
+  it("helmose 全参数组合：due: + priority: + urgency: + #project", () => {
+    expect(
+      buildTaskBullet({ text: "v0.2 上线", dueDate: "2026-07-01", urgency: "high", projectName: "Helmose", priority: 3 })
+    ).toBe("- [ ] v0.2 上线 due:2026-07-01 priority:3 urgency:high #project:Helmose");
   });
 
   it("projectName 空字符串不追加标签", () => {
-    expect(buildTaskBullet("任务", null, null, "  ")).toBe("- [ ] 任务");
+    expect(buildTaskBullet({ text: "任务", projectName: "  " })).toBe("- [ ] 任务");
+  });
+
+  // —— obsidian 兼容模式（对齐 Obsidian Tasks 插件 emoji 标准）——
+
+  it("obsidian 模式：📅 due + 🔁 repeat + ⏫ priority + 🔥 urgency + #project", () => {
+    expect(
+      buildTaskBullet({ text: "v0.2 上线", dueDate: "2026-07-01", urgency: "high", projectName: "Helmose", priority: 3, status: "todo", repeatRule: "week", markingStyle: "obsidian" })
+    ).toBe("- [ ] v0.2 上线 📅 2026-07-01 🔁 every week ⏫ 🔥 #project:Helmose");
+  });
+
+  it("obsidian 模式 priority：3/2/1 → ⏫/🔼/🔽", () => {
+    expect(buildTaskBullet({ text: "a", priority: 3, markingStyle: "obsidian" })).toBe("- [ ] a ⏫");
+    expect(buildTaskBullet({ text: "a", priority: 2, markingStyle: "obsidian" })).toBe("- [ ] a 🔼");
+    expect(buildTaskBullet({ text: "a", priority: 1, markingStyle: "obsidian" })).toBe("- [ ] a 🔽");
+  });
+
+  // —— 边界 + 全局 store 联动（前端 H5 回归）——
+
+  it("priority 越界 clamp 到 3（负数/0 不加标记）", () => {
+    expect(buildTaskBullet({ text: "a", priority: 99 })).toBe("- [ ] a priority:3");
+    expect(buildTaskBullet({ text: "a", priority: -1 })).toBe("- [ ] a");
+    expect(buildTaskBullet({ text: "a", priority: 0 })).toBe("- [ ] a");
+  });
+
+  it("repeatRule 不在白名单 → 忽略（防脏值污染 bullet）", () => {
+    expect(buildTaskBullet({ text: "a", repeatRule: "weekday" })).toBe("- [ ] a");
+    expect(buildTaskBullet({ text: "a", repeatRule: "" })).toBe("- [ ] a");
+  });
+
+  it("status done/doing 前缀正确", () => {
+    expect(buildTaskBullet({ text: "a", status: "done" })).toBe("- [x] a");
+    expect(buildTaskBullet({ text: "a", status: "doing" })).toBe("- [/] a");
+  });
+
+  it("markingStyle 参数显式传入 → 覆盖全局 store", () => {
+    useMarkingStyleStore.setState({ style: "helmose" });
+    expect(buildTaskBullet({ text: "a", priority: 3, markingStyle: "obsidian" })).toBe("- [ ] a ⏫");
+  });
+
+  it("不传 markingStyle → 读全局 store", () => {
+    const prev = useMarkingStyleStore.getState().style;
+    useMarkingStyleStore.setState({ style: "obsidian" });
+    try {
+      expect(buildTaskBullet({ text: "a", priority: 3 })).toBe("- [ ] a ⏫");
+    } finally {
+      useMarkingStyleStore.setState({ style: prev });
+    }
   });
 });
 

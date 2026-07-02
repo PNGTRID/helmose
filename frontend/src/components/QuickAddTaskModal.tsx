@@ -10,6 +10,7 @@ import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useActiveProjects } from "../hooks/useActiveProjects";
 import { buildTaskBullet } from "../utils/quickAdd";
+import AppIcon from "../components/AppIcon";
 import type { Task } from "../types";
 
 interface Props {
@@ -19,7 +20,7 @@ interface Props {
 }
 
 const URGENCY_OPTIONS = [
-  { label: "紧急 🔥", value: "high" },
+  { label: (<><AppIcon name="fire" size={12} /> 紧急</>), value: "high" },
   { label: "重要", value: "mid" },
   { label: "一般", value: "low" },
 ];
@@ -107,7 +108,14 @@ export default function QuickAddTaskModal({ open, onCancel, onSuccess }: Props) 
       const nc = await api.createTodayNote(vault.id);
       // 2. 拼装 bullet（buildTaskBullet；repeat 仅在白名单内时拼 🔁 every xxx）
       const rule = repeatRule || null;
-      const bullet = buildTaskBullet(t, due, urgency, projectName, null, "todo", rule);
+      const bullet = buildTaskBullet({
+        text: t,
+        dueDate: due,
+        urgency,
+        projectName,
+        status: "todo",
+        repeatRule: rule,
+      });
       // 3. 作为子任务 → 前置 2 空格缩进（indexer tasks.rs indent_width>0 → 子任务，
       //    归属「今日待办」section 内最近的顶层父任务）
       const finalBullet =

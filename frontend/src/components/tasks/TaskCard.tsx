@@ -4,6 +4,8 @@
 import "./TaskCard.css";
 import { Checkbox, Tag, Tooltip, Space, Typography } from "antd";
 import { useDraggable } from "@dnd-kit/core";
+import AppIcon from "../../components/AppIcon";
+import { useMarkingStyleStore, MARKING_STYLE_OBSIDIAN } from "../../stores/markingStyle";
 import type { Task, NoteMeta } from "../../types";
 
 const { Text } = Typography;
@@ -36,6 +38,8 @@ export default function TaskCard({
   draggable = true,
   compact = false,
 }: Props) {
+  // 标记风格（B2：obsidian 模式 priority 显示箭头 emoji，与 buildTaskBullet 写入契约一致，切模式有可见反馈）
+  const style = useMarkingStyleStore((s) => s.style);
   // useDraggable：source_line==null 的聚合任务禁拖（与就地编辑边界一致）
   const canDrag = draggable && task.source_line != null;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -78,17 +82,30 @@ export default function TaskCard({
               <Space size={4} wrap>
                 {task.due_date && <Tag color="orange">{task.due_date}</Tag>}
                 {task.priority > 0 && (
-                  <span title={`优先级 P${4 - task.priority}`}>
-                    {"⭐".repeat(task.priority)}
+                  <span
+                    title={`优先级 P${4 - task.priority}`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 1 }}
+                  >
+                    {style === MARKING_STYLE_OBSIDIAN ? (
+                      // obsidian 模式：与 buildTaskBullet 写入契约一致，单箭头 emoji（3→⏫ 2→🔼 1→🔽）
+                      <span style={{ fontSize: 12, lineHeight: 1 }}>
+                        {task.priority === 3 ? "⏫" : task.priority === 2 ? "🔼" : "🔽"}
+                      </span>
+                    ) : (
+                      // helmose 模式：⭐×N
+                      Array.from({ length: task.priority }).map((_, i) => (
+                        <AppIcon key={i} name="star" size={11} color="#faad14" />
+                      ))
+                    )}
                   </span>
                 )}
-                {task.status === "doing" && <Tag color="processing">🔄 进行中</Tag>}
-                {effectiveUrgency === "high" && task.urgency !== "high" && (
-                  <Tooltip title="按截止日期派生（未手动标记 🔥）">
-                    <Tag color="red">⚡紧急</Tag>
+                {task.status === "doing" && <Tag color="processing"><AppIcon name="reload" size={11} spin /> 进行中</Tag>}
+                {effectiveUrgency === "high" && task.urgency === "" && (
+                  <Tooltip title="按截止日期派生（未手动标记为紧急）">
+                    <Tag color="red"><AppIcon name="thunder" size={11} /> 紧急</Tag>
                   </Tooltip>
                 )}
-                {task.urgency === "high" && <Tag color="red">🔥</Tag>}
+                {task.urgency === "high" && <Tag color="red"><AppIcon name="fire" size={11} /></Tag>}
                 {sourceNote && (
                   <Text type="secondary" style={{ fontSize: 11 }}>
                     {sourceNote.file_name}
@@ -101,7 +118,7 @@ export default function TaskCard({
       </div>
       {!canDrag && task.source_line == null && (
         <Tooltip title="聚合 section 任务不支持拖拽改字段">
-          <span className="task-card-lock">🔒</span>
+          <span className="task-card-lock"><AppIcon name="lock" size={12} /></span>
         </Tooltip>
       )}
     </div>

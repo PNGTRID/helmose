@@ -11,8 +11,8 @@
 | 层 | 技术 |
 |---|---|
 | 桌面框架 | Tauri v2（Rust 后端 + React 前端） |
-| 后端 | Rust（edition 2021）：rusqlite 0.32 / walkdir 2.5 / pulldown-cmark 0.11 / gray_matter / notify（增量索引已启用）/ sha2 |
-| 前端 | React 19 + TypeScript 5.9 + Vite 7 + antd 6 + Zustand 5 + react-router-dom 7 |
+| 后端 | Rust（edition 2021）：rusqlite 0.32 / walkdir 2.5 / pulldown-cmark 0.11 / gray_matter / notify（增量索引已启用）/ sha2 / tauri-plugin-notification（任务到期桌面通知）/ tauri-plugin-updater |
+| 前端 | React 19 + TypeScript 5.9 + Vite 7 + antd 6 + Zustand 5 + react-router-dom 7 + TipTap 3（WYSIWYG 富文本编辑，已替换 CodeMirror）+ @dnd-kit（四象限拖拽） |
 | 数据 | 本地 markdown（vault，真相源）+ SQLite（`<app_data_dir>/helmose.db`，派生缓存） |
 
 详细见 `.spec-workflow/steering/tech.md`。
@@ -42,7 +42,7 @@ cd frontend && pnpm build         # = tsc -b && vite build（前端类型 + 构�
 1. **vault 是唯一真相源**。SQLite 是派生缓存——删库可从 vault 全量重建。永远不要把 SQLite 当主存。
 2. **vault 原文只读**。索引/查询/浏览一律只读 md 文件；任何写 vault（编辑、Agent inbox 写回）必须有用户明确动作 + 保护机制。**绝不在用户没要求时改动 vault 原文**。
 3. **IPC 边界**：Tauri v2 自动转参数名 `camelCase ↔ snake_case`；**返回值 JSON 字段保持 snake_case**（Rust serde 默认），前端 TS 接口必须对齐（如 `rel_path`、`note_type`、`last_indexed`）。
-4. **分层解析（契约驱动）**：`services/contract/mod.rs` 内置 ~/wiki/规范.md 契约（10 个顶层目录 + 11 种 type + type→dir 映射），`infer_note_type`（frontmatter.type 优先 + 路径最长前缀反查）+ `infer_layer`（按 type 结构化程度判 L1/L2/L3）取代旧 `layers.rs`。新增 vault 目录结构时改 `contract::TYPE_DIR_PAIRS` / `TOP_LEVEL_DIRS`，否则 `note_type` 反查不到会降级为 `None`（默认 L2）。
+4. **分层解析（契约驱动）**：`services/contract/mod.rs` 内置 ~/wiki/规范.md 契约（10 个顶层目录 + 12 种 type（含 log）+ type→dir 映射），`infer_note_type`（frontmatter.type 优先 + 路径最长前缀反查）+ `infer_layer`（按 type 结构化程度判 L1/L2/L3）取代旧 `layers.rs`。新增 vault 目录结构时改 `contract::TYPE_DIR_PAIRS` / `TOP_LEVEL_DIRS`，否则 `note_type` 反查不到会降级为 `None`（默认 L2）。
 5. **排除目录单一契约**：`utils/exclude.rs` 是唯一排除规则定义点（`EXCLUDE_DIRS = ["6-原始资料", "专家团"]` + 隐藏目录），`commands/index.rs`、`commands/library.rs`、`services/indexer/incremental.rs` 共用 `is_excluded_*`。新增排除目录只改这一处，避免"索引视图"与"浏览视图"漂移。
 
 ## 性能红线（硬约束）
@@ -87,6 +87,11 @@ vault 规模约 **1.9 万 md 文件**。以下规则必须遵守：
 - **projects 深度结构化**（`get_projects` 返回 priority/is_mainline/含 top-3 兜底/okr_priority/last_activity 全字段；indexer 两层提取）。
 - **events 解析**（从笔记「关键事件/时间线」section 提取 bullet 填 events 表 + `list_events` 命令；日历/今日页消费）。
 - **tasks due_date 解析**（bullet 内 `📅` / `due:` / `截止:` / `deadline` 标记 → due_date 列；TasksPage 分组 + TodayPage 今日待办按此筛）。
+- **任务标记文字化（Postel 法则：读宽容、写规范）**——独立自建定位 + Obsidian 用户零摩擦切入：
+  - **读侧 indexer 三格式全兼容**（`services/indexer/tasks.rs`）：due（📅 / due: / 截止: / deadline）/ priority（`⭐×N` Helmose老 / `⏫🔼🔽` Obsidian Tasks标准→3/2/1 / `priority:N` Helmose文字，N=1-3，3=最高）/ urgency 三态（`🔥`/`urgency:high`=显式 high 强制 / `urgency:low`=显式 low 压制 due_date 派生 / 无标记=`""` 未设由前端 due_date 派生；mid 仅派生不入 bullet，Blocker #1 方案 B：manual low 可覆盖派生 high，治「今天到期拖不进不紧急象限」）/ repeat（`🔁 every X` Helmose老 / `repeat:X` Helmose文字）。三种格式命中即停，统一 `split_*` 清理。
+  - **写侧默认 Helmose 文字契约**（独立演进，对 Agent 可读性更友好）：`buildTaskBullet`（`utils/quickAdd.ts`，写侧唯一拼装源）+ `set_task_priority/urgency_inner`（`commands/library.rs`，加 `marking_style: Option<String>` 参数，None 默认 helmose）按风格输出；切风格时剥全格式不残留。
+  - **双模式开关**：`stores/markingStyle.ts`（localStorage `helmose-marking-style` 持久化，默认 `helmose`）+ Settings 页「任务标记风格」Segmented；`obsidian` 模式写侧对齐 Obsidian Tasks 插件（📅/⏫🔼🔽/🔁/🔥，双端互通），`getMarkingStyle()` 供非组件场景读。
+  - **存量迁移**：priority/repeat 读侧全兼容，老 emoji bullet 不动即可用；**urgency 三态有一次性重索引**（`App.tsx` localStorage `helmose-urgency-3state-v1` 标记，首次启动强制 `index` 把存量无标记 `urgency="low"` 刷新为 `""` 未设，否则会被误当显式 low 压制派生）。批量转换工具 `migrate_task_markers`（dry-run + 备份 + 手动触发）为可选 backlog，**未实现**（碰 vault 原文高风险，读侧已兼容无必要，需时再做）。
 - **创建笔记 `create_note`**（用户按钮触发写 vault + 增量索引 + 路径防穿越 + 不覆盖；TodayPage「今日笔记」动线）。
 - **前向链接 `get_forward_links`**（SidePanel 双向链接完整：反链 + 前向）。
 - **标签精确筛选 `list_notes_by_tag`**（tags JSON 数组精确匹配，替代 FTS 全文搜的宽泛）。
@@ -95,14 +100,33 @@ vault 规模约 **1.9 万 md 文件**。以下规则必须遵守：
 - **FilePanel 虚拟列表**（antd Tree `virtual` + ResizeObserver 测高，1.9 万节点只渲染可见行）。
 - **自动更新框架**（`tauri-plugin-updater` + `check_update` 命令 + SettingsPage 按钮；pubkey/endpoints 占位 `TODO_REPLACE_AT_RELEASE`，发布时配真实值）。
 - **重置安装 `reset_app`**（DROP 派生表 + 清 agent 缓存 + 移除 vault 注册，回 Onboarding；绝不碰 vault 原文）。
+- **今日计划页 `PlannerPage`**（三栏：收集箱/分类/迷你日历 + 四象限+输入条 + 详情面板；视觉照搬根目录 `task-planner-preview.html`；分类软方案 = localStorage 自定义分类 + 项目/文件夹/tag 三选一映射 + `stores/plannerCategories.classifyTask` 推导，不落库不改 schema；描述用 Obsidian Tasks 缩进行惯例存任务行下方缩进纯文本，不污染 `task.text`；四象限拖拽写回复用 `set_task_priority`+`set_task_urgency`；右栏「更多」菜单标今日/清期限/复制任务）。
+- **行级就地写入（inline-crud）**（`commands/library.rs`，全经 `save_note_content_inner` 收口 = 备份 + 重索引，不自写 fs::write）：
+  - `insert_line_after`（指定 1-based 去fm正文行号后插新行；子计划新增用，缩进 checkbox 子任务由 indexer 按最近非缩进父归属 `parent_task_id`）。
+  - `update_line` / `delete_line` / `append_bullet`（行级改/删/尾追加）。
+  - `patch_frontmatter`（就地改单/多个 fm 字段，不动正文）/ `set_tag`（增删 tag 数组元素）。
+- **任务字段就地写入（M3）**：`set_task_status` / `set_task_priority` / `set_task_urgency`（命令注册在 `library.rs`；priority/urgency 加 `marking_style` 参数，None 默认 helmose 文字契约；四象限拖拽 + 任务卡状态切换复用此组命令写回）。
+- **WYSIWYG 富文本编辑（TipTap v3）**（`components/RichEditor.tsx` + `RichEditorToolbar`，替换旧 CodeMirror）：所见即所得（标题/粗体/列表/任务复选框/表格/链接），对外仍是 markdown 字符串（`@tiptap/markdown` 双向转换），全链路零改动；`NoteEditor` 包装它只编辑「去 fm 正文」，保存走 `save_note_body`；含 `unescapeWikilink` 还原 `@tiptap/markdown` 对 `[[wikilink]]` 成对括号的转义（防双链/反链/图谱断链 + 防污染 vault 原文）。
+- **笔记正文写回 `save_note_body`**（`commands/library.rs`）：读盘取原 frontmatter → 拼接新正文 → 备份 + 写盘 + 增量索引；**不丢 type/tags/created 等 fm**（区别于 `save_note_content` 整篇覆盖，WYSIWYG 编辑专用）。
+- **OKR 全链路**（M1）：`services/indexer/okrs.rs` 从 strategy/project 文档的 KR section 提取填 `okrs` 表；`commands/okrs.rs::list_okrs`（可按 quarter 过滤，排序 quarter DESC→P0 在前）；前端项目页 ProgressView 消费。
+- **项目进度聚合 `get_project_progress`**（M5，`commands/projects.rs`）：运行时聚合项目下任务完成率，**不入 frontmatter**（纯派生展示）。
+- **任务到期提醒（M2，`commands/reminders.rs`）**：`ensure_reminders`（扫 tasks 表 due_date 未来 N 天未完成任务，按「截止前一天 9:00」幂等生成 reminders）+ `fire_due_reminders`（前端 setInterval 60s 调，查到期未发 → `tauri-plugin-notification` 桌面通知 + 标 fired）；查询/标 fired 已拆纯函数可单测。
+- **移动 / 重命名笔记（M1，`commands/note_move.rs`）**：`move_note` / `rename_note`（路径安全校验禁 `..` + 索引层同步）+ `apply_ref_updates`（扫描含 `old_path` 的路径型引用 `[文本](old_path)` / `[[old_path]]`，**用户授权后**逐条经 `save_note_content_inner` 收口写回；按文件名匹配的反链由 links 表自动维护，不进此列表）。
+- **AI 配置 `settings`（M4，`commands/settings.rs`）**：`get_ai_settings` / `set_ai_settings` 存 `app_data_dir/config.json`（key 不入 vault 不入 git，Unix 0600 收紧权限）；`read_ai_settings`（容错版，供 ai 命令壳复用避免漂移）+ `upsert_ai_generation_inner` / 读缓存（降级链兜底）。
+- **AI 教练层（M4，`commands/ai.rs` + `services/ai/`）**——v0.2 提前部分落地：
+  - **抽象层** `services/ai/`：`AiClient` trait（Dyn-safe，provider 切换零业务改动）+ `providers/`（Claude / OpenAI，留 Ollama 本地扩展点）+ `complete_with_budget`；数据最小化（只接聚合摘要字符串，user 硬上限 4k 字符截断，绝不发 vault 原文）+ 30s 超时 + `AiError`（Network/HttpStatus/Parse）绝不 panic。
+  - **三个命令**：`ai_mainline`（主线判定，写 `life_state_snapshots.mainline_project`）/ `ai_coach`（每日建议，写 `today_focus`）/ `ai_tomorrow`（明日一句）。
+  - **降级链**：未配 key/`build_client`→None → 本地启发式（复用 indexer/projects top-3 口径）→ `ai_generations` 缓存 → 空态；结果带 `source=ai|heuristic` 标降级。
+  - **明日一句编辑 `update_tomorrow_sentence`**（前端 `saveTomorrowEdit` 复用同一收口逻辑）。
 
 🚧 **待办**：
 
-- AI 教练层（v0.2）：主线判定、每日建议、明日一句。
 - Agent inbox 写回（状态导出已做，写回未做）。
 - 真实 updater endpoint/pubkey（M5 占位，发布时配）。
 - events 的 `project_id` 关联（event→project 映射未做）。
 - 前向链接的 dangling 提示（当前只显示已解析的）。
+- AI 提醒可配置（当前 `reminders.rs` 固定 LEAD_DAYS=1 / REMIND_HOUR=9，后续接 settings）。
+- AI provider 扩展（`services/ai/providers` 留 Ollama 本地扩展点，未接）。
 - bundle 拆分（manualChunks 拆 vendor，当前 1.78MB 桌面应用本地加载可接受）。
 
 ## 工作区状态

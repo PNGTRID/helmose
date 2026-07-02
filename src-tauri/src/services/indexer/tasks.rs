@@ -4,8 +4,8 @@
 // 解析字段（独立存，从 text 清理，与 due_date 同模式）：
 //   - due_date：📅 / due: / 截止: / deadline（原模式）
 //   - status：  checkbox 前缀 `[x]`=done / `[/]`=doing / `[ ]`=todo；或 bullet 内 🔄=doing
-//   - priority：⭐ 数 1-3 = priority 1-3
-//   - urgency： 🔥 = high（无 🔥 则默认 low；派生模式仅前端做）
+//   - priority：读侧三格式兼容（⭐×N 老 / ⏫🔼🔽 Obsidian=3/2/1 / priority:N 文字，3=最高）
+//   - urgency： 读侧二格式兼容（🔥 老 = high / urgency:high|low 文字）；mid 仅前端 due_date 派生，不入 bullet
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -57,6 +57,83 @@ pub static RE_STATUS_DOING: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*🔄").un
 pub static RE_PRIORITY: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*(⭐+)").unwrap());
 // 🔥 = urgency high（独立标记）。匹配后整体清理。
 pub static RE_URGENCY_HIGH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*🔥").unwrap());
+
+// —— P1 读侧扩展：Obsidian Tasks emoji + Helmose 文字标记全兼容（Postel 法则：读宽容）——
+// 写侧默认 Helmose 文字标准（P2 落地），Obsidian 兼容模式由前端 buildTaskBullet 标记风格开关控制。
+//
+// Obsidian Tasks 优先级 emoji：⏫=high(3) / 🔼=medium(2) / 🔽=low(1)
+pub static RE_PRIORITY_OBSIDIAN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\s*(⏫|🔼|🔽)").unwrap());
+// M1 单词边界：文字标记前缀要求「行首或空白」(?:^|\s+)，挡「讨论priority:2」无空格粘连误匹配；
+// 「研究 priority:3 的方案」这类空格分隔正文仍会误匹配（正则固有限制，依赖用户不在正文写标记词）。
+// Helmose 文字优先级：priority:1-3（大小写不敏感，数值大=高优，3=最高）
+pub static RE_PRIORITY_TEXT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:^|\s+)priority\s*[:：]\s*([1-3])").unwrap());
+// Helmose 文字紧急度：urgency:high/low（三态：显式 high/low + 未设空串；mid 仅前端 due_date 派生）
+pub static RE_URGENCY_TEXT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:^|\s+)urgency\s*[:：]\s*(high|low)").unwrap());
+// Helmose 文字重复：repeat:X（X 同 🔁 every 白名单：day/week/month/Mon-Sun，复用 normalize_repeat_rule）
+pub static RE_REPEAT_TEXT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:^|\s+)repeat\s*[:：]\s*([A-Za-z]+)").unwrap());
+
+// —— 写侧/剥离共用：priority 数值常量 + Obsidian emoji 双向转换（读侧 split + 写侧 set_task_* 共用，避免 magic number 漂移）——
+pub const PRI_HIGH: i32 = 3;
+pub const PRI_MED: i32 = 2;
+pub const PRI_LOW: i32 = 1;
+
+/// Obsidian Tasks emoji → priority 数值（⏫=3 / 🔼=2 / 🔽=1）。未知 emoji → PRI_LOW。
+pub fn obsidian_emoji_to_pri(emoji: &str) -> i32 {
+    match emoji {
+        "⏫" => PRI_HIGH,
+        "🔼" => PRI_MED,
+        _ => PRI_LOW, // 🔽 或未知
+    }
+}
+
+/// priority 数值 → Obsidian Tasks emoji（3=⏫ / 2=🔼 / 1=🔽）。越界 clamp 到 1-3。
+pub fn pri_to_obsidian_emoji(p: i32) -> &'static str {
+    match p.clamp(PRI_LOW, PRI_HIGH) {
+        PRI_HIGH => "⏫",
+        PRI_MED => "🔼",
+        _ => "🔽",
+    }
+}
+
+// 剥离专用宽正则：priority:N 数值不限范围（清越界脏值如 priority:0 / priority:5，解析侧 RE_PRIORITY_TEXT 仍只认 1-3）。
+// 注：rust regex crate 不支持 look-behind，故剥离正则与解析正则分离——解析限 [1-3]，剥离收 \d+ 兜底。
+// M1：前缀同步 (?:^|\s+) 与解析侧一致，保证「正文无空格粘连字样」不被误清（保留原文，与 PARSE 同口径）。
+static RE_PRIORITY_TEXT_STRIP: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:^|\s+)priority\s*[:：]\s*\d+").unwrap());
+
+/// 剥离所有 priority 标记（⭐×N / ⏫🔼🔽 / priority:N 三格式，含越界脏值），trim_end 保留 bullet 缩进。
+/// 读侧 split_priority + 写侧 set_task_priority_inner 共用的单一源（避免三格式剥离逻辑两处漂移）。
+pub fn strip_priority_marks(text: &str) -> String {
+    let t = RE_PRIORITY.replace_all(text, "");
+    let t = RE_PRIORITY_OBSIDIAN.replace_all(&t, "");
+    let t = RE_PRIORITY_TEXT_STRIP.replace_all(&t, "");
+    t.trim_end().to_string()
+}
+
+/// 剥离所有 urgency 标记（🔥 / urgency:high|low 两格式），trim_end 保留 bullet 缩进。
+/// 读侧 split_urgency + 写侧 set_task_urgency_inner 共用的单一源。
+pub fn strip_urgency_marks(text: &str) -> String {
+    let t = RE_URGENCY_HIGH.replace_all(text, "");
+    let t = RE_URGENCY_TEXT.replace_all(&t, "");
+    t.trim_end().to_string()
+}
+
+/// 嗅探原 bullet 行已写的 priority 格式：含 ⏫🔼🔽 → "obsidian"；含 priority:N → "helmose"；其他（⭐ 老/无标记）→ None。
+/// 写侧 set_task_priority_inner 用此优先保留单 bullet 风格稳定（不被全局快照风格覆盖）。
+/// 注：⭐ 是老读侧格式（写侧不再产出），嗅探到 ⭐ 视为无明确风格 → 回落全局 marking_style（顺带引导迁移到文字契约）。
+pub fn sniff_priority_style(line: &str) -> Option<&'static str> {
+    if RE_PRIORITY_OBSIDIAN.is_match(line) {
+        Some("obsidian")
+    } else if RE_PRIORITY_TEXT.is_match(line) {
+        Some("helmose")
+    } else {
+        None
+    }
+}
 
 /// 从 bullet 文本拆出 due_date 并清理日期标记。
 /// 支持 `📅 2026-07-01` / `due: 2026-07-01` / `截止：2026.07.01` / `deadline 2026-07-01`。
@@ -114,25 +191,44 @@ pub fn replace_or_append_due(line: &str, new_iso: &str) -> String {
     format!("{} 📅 {}", line.trim_end(), new_iso)
 }
 
-/// 从 bullet 文本拆出 priority（⭐ 数 1-3）并清理标记。
-/// 返回 (去掉 ⭐ 的干净 text, priority)。无 ⭐ → (原文, 0)。
+/// 从 bullet 文本拆出 priority 并清理标记（读侧三格式兼容）：
+///   1) `⭐×N`      Helmose 老格式（N=1-3，clamp）
+///   2) `⏫🔼🔽`    Obsidian Tasks 标准（=3/2/1）
+///   3) `priority:N` Helmose 文字标准（N=1-3，3=最高）
+/// 算值：按格式优先级取首个命中（互斥）；剥离：全剥三格式（含越界脏值），保证混合格式不残留。
+/// 返回 (去掉标记的干净 text, priority)。无任何标记 → (原文, 0)。
 fn split_priority(text: &str) -> (String, i32) {
-    if let Some(caps) = RE_PRIORITY.captures(text) {
-        let n = caps[1].chars().filter(|&c| c == '⭐').count() as i32;
-        let cleaned = RE_PRIORITY.replace_all(text, "").trim().to_string();
-        return (cleaned, n.clamp(1, 3));
-    }
-    (text.to_string(), 0)
+    // 算值：按格式优先级取首个命中（⭐ > ⏫🔼🔽 > priority:N）。同 bullet 多格式共存取首个，互斥。
+    let pri = if let Some(caps) = RE_PRIORITY.captures(text) {
+        caps[1].chars().filter(|&c| c == '⭐').count() as i32
+    } else if let Some(caps) = RE_PRIORITY_OBSIDIAN.captures(text) {
+        obsidian_emoji_to_pri(&caps[1])
+    } else if let Some(caps) = RE_PRIORITY_TEXT.captures(text) {
+        caps[1].parse::<i32>().unwrap_or(0)
+    } else {
+        0
+    };
+    // 全剥三格式（含越界脏值如 priority:5），单一源；保证混合格式 bullet 不残留（修 H5/S4）。
+    let cleaned = strip_priority_marks(text);
+    (cleaned, pri.clamp(0, PRI_HIGH))
 }
 
-/// 从 bullet 文本拆出 urgency（🔥 = high）并清理标记。
-/// 返回 (去掉 🔥 的干净 text, urgency)。无 🔥 → (原文, "low")。
+/// 从 bullet 文本拆出 urgency 并清理标记（读侧二格式兼容）：
+///   1) `🔥`            Helmose 老格式 = high
+///   2) `urgency:high|low` Helmose 文字标准（手动二值；mid 仅前端派生，不入 bullet）
+/// 算值后全剥两格式（单一源），保证不残留。返回 (干净 text, urgency)。
+/// 三态语义（Blocker #1 方案 B）：无标记 → ""（未设，前端按 due_date 派生）；
+/// `urgency:low` → "low"（显式不紧急，前端压制 due_date 派生）；🔥/urgency:high → "high"。
 fn split_urgency(text: &str) -> (String, String) {
-    if RE_URGENCY_HIGH.is_match(text) {
-        let cleaned = RE_URGENCY_HIGH.replace_all(text, "").trim().to_string();
-        return (cleaned, "high".to_string());
-    }
-    (text.to_string(), "low".to_string())
+    let urg = if RE_URGENCY_HIGH.is_match(text) {
+        "high".to_string()
+    } else if let Some(caps) = RE_URGENCY_TEXT.captures(text) {
+        caps[1].to_lowercase() // high|low（正则 (?i) 大小写不敏感，归一化为小写）
+    } else {
+        String::new() // 未设：无 urgency 标记（前端按 due_date 派生，区别于显式 "low"）
+    };
+    let cleaned = strip_urgency_marks(text);
+    (cleaned, urg)
 }
 
 // M2：重复规则标记：🔁 every xxx（xxx = day/week/month 或 Mon/Tue/.../Sun，大小写不敏感）
@@ -141,17 +237,25 @@ fn split_urgency(text: &str) -> (String, String) {
 static RE_REPEAT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\s*🔁\s*every\s+([A-Za-z]+)").unwrap());
 
-/// 从 bullet 文本拆出 repeat_rule（🔁 every xxx）并清理标记。
-/// 仅接受 day/week/month/英文星期（Mon/Tue/Wed/Thu/Fri/Sat/Sun，全称也收）。
-/// 语法错（`🔁 abc` 无 every / 词不在白名单）→ None 当普通任务。
-/// 返回 (去掉 🔁 标记的干净 text, repeat_rule)。
+/// 从 bullet 文本拆出 repeat_rule 并清理标记（读侧二格式兼容）：
+///   1) `🔁 every xxx` Helmose 老格式（语法错即缺 every / 词不在白名单 → 不清 🔁，保留原文）
+///   2) `repeat:xxx`   Helmose 文字标准（xxx 同白名单，复用 normalize_repeat_rule）
+/// 返回 (去掉标记的干净 text, repeat_rule)。无有效标记 → (原文, None)。
 fn split_repeat(text: &str) -> (String, Option<String>) {
+    // 1) 老：🔁 every xxx（normalize 失败时不清 🔁，保留原文给用户，fallthrough 试 repeat:）
     if let Some(caps) = RE_REPEAT.captures(text) {
         let raw = caps[1].to_lowercase();
-        let rule = normalize_repeat_rule(&raw);
-        if rule.is_some() {
+        if let Some(rule) = normalize_repeat_rule(&raw) {
             let cleaned = RE_REPEAT.replace_all(text, "").trim().to_string();
-            return (cleaned, rule);
+            return (cleaned, Some(rule));
+        }
+    }
+    // 2) Helmose 文字：repeat:xxx
+    if let Some(caps) = RE_REPEAT_TEXT.captures(text) {
+        let raw = caps[1].to_lowercase();
+        if let Some(rule) = normalize_repeat_rule(&raw) {
+            let cleaned = RE_REPEAT_TEXT.replace_all(text, "").trim().to_string();
+            return (cleaned, Some(rule));
         }
     }
     (text.to_string(), None)
@@ -444,8 +548,9 @@ mod tests {
     }
 
     #[test]
-    fn urgency_无火_为low() {
-        assert_eq!(split_urgency("任务").1, "low");
+    fn urgency_无火_为未设空串() {
+        // 三态：无标记 → ""（未设，前端按 due_date 派生，区别于显式 "low"）
+        assert_eq!(split_urgency("任务").1, "");
         assert_eq!(split_urgency("任务 🔥").1, "high");
     }
 
@@ -573,5 +678,109 @@ mod tests {
         assert!(v[0].parent_source_line.is_none());
         assert_eq!(v[1].parent_source_line, Some(1), "子 → 父");
         assert_eq!(v[2].parent_source_line, Some(1), "孙 → 最近顶层（父）");
+    }
+
+    // ============ P1：读侧三格式兼容（Obsidian Tasks emoji + Helmose 文字） ============
+
+    #[test]
+    fn priority_obsidian_箭头_解析为3_2_1() {
+        // Obsidian Tasks 标准：⏫=high(3) / 🔼=medium(2) / 🔽=low(1)
+        assert_eq!(split_priority("任务 ⏫").1, 3);
+        assert_eq!(split_priority("任务 🔼").1, 2);
+        assert_eq!(split_priority("任务 🔽").1, 1);
+        assert_eq!(split_priority("任务 ⏫").0, "任务", "text 清理");
+    }
+
+    #[test]
+    fn priority_文字标记_解析() {
+        // Helmose 文字标准：priority:N（1-3，3=最高）
+        assert_eq!(split_priority("任务 priority:1").1, 1);
+        assert_eq!(split_priority("任务 priority:3").1, 3);
+        assert_eq!(split_priority("任务 PRIORITY:2").1, 2, "大小写不敏感");
+        assert_eq!(split_priority("任务 priority：2").1, 2, "全角冒号也收");
+        assert_eq!(split_priority("任务 priority:2").0, "任务", "text 清理");
+        // M1 单词边界：无空格粘连（中文/拉丁紧贴 priority）不识别为标记，保留原文（PARSE/STRIP 一致）
+        assert_eq!(split_priority("讨论priority:2").1, 0, "中文紧贴不识别");
+        assert_eq!(split_priority("讨论priority:2").0, "讨论priority:2", "原文保留不清洗");
+        assert_eq!(split_priority("xpriority:2").1, 0, "拉丁粘连不识别");
+    }
+
+    #[test]
+    fn urgency_文字标记_解析() {
+        assert_eq!(split_urgency("任务 urgency:high").1, "high");
+        assert_eq!(split_urgency("任务 urgency:low").1, "low");
+        assert_eq!(split_urgency("任务 URGENCY:HIGH").1, "high", "大小写不敏感");
+        assert_eq!(split_urgency("任务 urgency:high").0, "任务", "text 清理");
+        // M1 单词边界：无空格粘连不识别为标记，保留原文
+        assert_eq!(split_urgency("讨论urgency:high").1, "", "中文紧贴不识别");
+        assert_eq!(split_urgency("讨论urgency:high").0, "讨论urgency:high", "原文保留不清洗");
+    }
+
+    #[test]
+    fn repeat_文字标记_解析() {
+        assert_eq!(split_repeat("任务 repeat:week").1.as_deref(), Some("week"));
+        assert_eq!(split_repeat("任务 repeat:Mon").1.as_deref(), Some("Mon"));
+        assert_eq!(
+            split_repeat("任务 REPEAT:monthly").1.as_deref(),
+            Some("month"),
+            "大小写不敏感 + 全称归一化"
+        );
+        assert_eq!(split_repeat("任务 repeat:week").0, "任务", "text 清理");
+    }
+
+    #[test]
+    fn obsidian_用户_bullet_全兼容() {
+        // Obsidian Tasks 标准子弹：📅 due + ⏫ priority → Helmose 应识别（用户零摩擦切入）
+        let v = extract_checkbox("- [ ] 季度评审 📅 2026-09-30 ⏫");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].due_date.as_deref(), Some("2026-09-30"));
+        assert_eq!(v[0].priority, 3, "⏫ → priority 3");
+        assert_eq!(v[0].text, "季度评审");
+    }
+
+    #[test]
+    fn helmose_文字_bullet_全字段() {
+        // Helmose 写侧标准（P2 默认输出）：文字 key:value 全字段，#project 标签保留
+        let v = extract_checkbox(
+            "- [ ] 写周报 due:2026-07-01 priority:3 urgency:high repeat:week #project:Helmose",
+        );
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].due_date.as_deref(), Some("2026-07-01"));
+        assert_eq!(v[0].priority, 3);
+        assert_eq!(v[0].urgency, "high");
+        assert_eq!(v[0].repeat_rule.as_deref(), Some("week"));
+        assert_eq!(v[0].text, "写周报 #project:Helmose");
+    }
+
+    // ============ 回归：混合格式全剥 + 越界值剥离（H5/S4/H6）============
+
+    #[test]
+    fn 混合格式priority_全部剥离不残留() {
+        // 脏数据：⭐ 与 priority:N 共存 → 算值取 ⭐（格式优先级首个命中），全剥两种格式不残留
+        let (text, pri) = split_priority("任务 ⭐⭐ priority:3");
+        assert_eq!(pri, 2, "⭐ 命中优先 → priority 2");
+        assert_eq!(text, "任务", "priority:3 也应剥离，不残留");
+        // ⏫ 与 priority:N 共存
+        let (text, pri) = split_priority("任务 ⏫ priority:1");
+        assert_eq!(pri, 3, "⏫ 命中优先 → priority 3");
+        assert_eq!(text, "任务", "priority:1 也应剥离");
+    }
+
+    #[test]
+    fn 越界priority文字值_剥离不残留() {
+        // priority:5 / priority:0 不在解析范围 [1-3]，但剥离必须清掉（否则 set_task_priority(0) 清空会残留）
+        let (text, pri) = split_priority("任务 priority:5");
+        assert_eq!(pri, 0, "越界值不解析 → 0");
+        assert_eq!(text, "任务", "越界 priority:5 仍应剥离");
+        assert_eq!(strip_priority_marks("任务 priority:0"), "任务");
+    }
+
+    #[test]
+    fn sniff_priority风格_嗅探原行格式() {
+        // obsidian emoji 行 → "obsidian"；priority:N 行 → "helmose"；⭐/无标记 → None
+        assert_eq!(sniff_priority_style("任务 ⏫"), Some("obsidian"));
+        assert_eq!(sniff_priority_style("任务 priority:2"), Some("helmose"));
+        assert_eq!(sniff_priority_style("任务 ⭐⭐"), None, "⭐ 老格式不嗅探");
+        assert_eq!(sniff_priority_style("任务"), None);
     }
 }

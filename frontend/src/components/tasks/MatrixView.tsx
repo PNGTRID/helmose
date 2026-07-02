@@ -158,12 +158,11 @@ export default function MatrixView({
       if (task.priority !== newPriority) {
         lastNc = await api.setTaskPriority(task.note_id, task.source_line, newPriority);
       }
-      // urgency：派生（无 🔥）需固化为 🔥（写 'high'）；现有 🔥 拖入低紧急象限需移除（写 'low'）
-      // 判定当前是否已手动 high：task.urgency 字段反映 vault 中 🔥 状态
-      const manualHigh = task.urgency === "high";
-      if (newUrgency === "high" && !manualHigh) {
+      // 三态写回（Blocker #1 方案 B）：用 effective（eff，含 due_date 派生）判定，manual low 可压制派生 high。
+      // 拖紧急象限且当前非 high → 写 high；拖不紧急象限且当前非 low → 写 low（派生 high 拖入 q2/q4 也写 low 压制，不再跳回）。
+      if (newUrgency === "high" && eff !== "high") {
         lastNc = await api.setTaskUrgency(task.note_id, task.source_line, "high");
-      } else if (newUrgency === "low" && manualHigh) {
+      } else if (newUrgency === "low" && eff !== "low") {
         lastNc = await api.setTaskUrgency(task.note_id, task.source_line, "low");
       }
       message.success(`已移到 ${QUADRANTS.find((q) => q.key === target)?.title}`);

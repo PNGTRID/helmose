@@ -9,6 +9,7 @@ import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useActiveProjects } from "../hooks/useActiveProjects";
 import { buildTaskBullet } from "../utils/quickAdd";
+import AppIcon from "../components/AppIcon";
 
 const { TextArea } = Input;
 
@@ -20,7 +21,7 @@ interface Props {
 const URGENCY_OPTIONS = [
   { label: "一般", value: "low" },
   { label: "重要", value: "mid" },
-  { label: "紧急 🔥", value: "high" },
+  { label: (<><AppIcon name="fire" size={12} /> 紧急</>), value: "high" },
 ];
 
 const PRIORITY_OPTIONS = [
@@ -60,7 +61,7 @@ export default function TaskForm({ onSubmitted }: Props) {
       // 1. 确保今日笔记存在（已存在则复用，不覆盖）
       const nc = await api.createTodayNote(vault.id);
       // 2. 拼 bullet（buildTaskBullet 单一源，含 priority/status，与 indexer 约定同口径）
-      const bullet = buildTaskBullet(t, due, urgency, projectName, priority, status);
+      const bullet = buildTaskBullet({ text: t, dueDate: due, urgency, projectName, priority, status });
       // 3. 追加到「今日待办」section
       await api.appendBullet(nc.id, "今日待办", bullet, true);
       message.success("已新建任务");

@@ -9,7 +9,7 @@ export type SortMode = "natural" | "name";
 export function fileIcon(name: string): ReactNode {
   const ext = name.split(".").pop()?.toLowerCase();
   if (ext === "md" || ext === "markdown")
-    return <FileTextOutlined style={{ marginRight: 6, color: "#8b5cf6", flexShrink: 0 }} />;
+    return <FileTextOutlined style={{ marginRight: 6, color: "var(--ob-accent)", flexShrink: 0 }} />;
   if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext ?? ""))
     return <FileImageOutlined style={{ marginRight: 6, color: "#10b981", flexShrink: 0 }} />;
   return <FileOutlined style={{ marginRight: 6, color: "var(--ob-text-faint)", flexShrink: 0 }} />;

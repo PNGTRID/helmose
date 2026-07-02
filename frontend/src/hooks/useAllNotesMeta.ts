@@ -1,7 +1,7 @@
 // 全量笔记元数据 hook：加载 vault 所有 NoteMeta（无正文，1.9 万文件不爆 IPC）。
 // CalendarPage / JournalPage 共用，消除重复全量拉取；watcherTick 驱动刷新。
 // 错误不静默：console.error + 暴露 error，让调用方区分「空数据」与「加载失败」。
-import { useEffect, useState } from "react";
+import { useEffect, startTransition, useState } from "react";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import type { NoteMeta } from "../types";
@@ -30,7 +30,9 @@ export function useAllNotesMeta(): AllNotesMetaState {
       .listAllNotesMeta(vault.id)
       .then((res) => {
         if (cancelled) return;
-        setNotes(res);
+        // 全量笔记元数据（~1.9 万）刷新放低优先级 transition：写回 vault 后 watcher 触发重拉时，
+        // 不阻塞 UI 交互（输入/拖拽/勾选不被这 1.9 万的解析与重渲染卡住）。所有订阅此 hook 的页面受益。
+        startTransition(() => setNotes(res));
         setError(null);
       })
       .catch((e) => {

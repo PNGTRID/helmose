@@ -13,7 +13,7 @@
 ### Key Dependencies/Libraries
 
 **Rust（`src-tauri/Cargo.toml`）**
-- `tauri` 2.0：桌面框架（shell/dialog/fs/opener 插件）。
+- `tauri` 2.0：桌面框架（shell/dialog/fs/opener/updater/notification 插件）。
 - `rusqlite` 0.32（`bundled`）：SQLite 索引库，单连接 + Mutex + WAL。
 - `walkdir` 2.5：vault 目录遍历。
 - `pulldown-cmark` 0.11（`default-features=false, features=["html"]`）：markdown → HTML 渲染（文档库预览）。
@@ -25,27 +25,30 @@
 - `anyhow` 1 / `thiserror` 1 / `tracing` 0.1 + `tracing-subscriber` 0.3：错误处理与日志。
 - `regex` 1 / `chrono` 0.4 / `uuid` 1.0：工具库。
 - `serde` / `serde_json`：IPC 序列化。
+- `tokio` 1（full）/ `reqwest` 0.12（rustls-tls + json）/ `async-trait` 0.1：M4 AI 教练层——tokio runtime + reqwest 调 LLM HTTP API + async_trait 让 `AiClient` trait dyn-safe（provider 可替换：Claude / OpenAI / 未来 Ollama）。
 
 **前端（`frontend/package.json`，包管理用 `pnpm` 11）**
 - `react` 19.2 + `react-dom` 19.2。
 - `antd` 6.1 + `@ant-design/icons` 6.1：UI 组件库。
-- `@uiw/react-codemirror` + `@codemirror/lang-markdown`：笔记编辑器（CodeMirror，编辑写回 vault）。
+- `@tiptap/react` 3 + `@tiptap/markdown` + `@tiptap/starter-kit`（+ task-list/task-item/table/link/placeholder 扩展）：**WYSIWYG 富文本编辑器**（`RichEditor.tsx`，替换旧 CodeMirror；所见即所得，对外仍是 markdown 字符串，save/索引/预览全链路零改动）。
+- `@dnd-kit/core` 6：四象限任务拖拽写回（PlannerPage MatrixView）。
 - `marked`：markdown → HTML 前端渲染（与后端 `pulldown-cmark` 并存）。
 - `react-router-dom` 7.1：路由库（依赖保留；当前主界面为 tab 工作台，非路由切换）。
-- `zustand` 5.0：状态管理（`stores/vault`、`stores/tabs`）。
+- `zustand` 5.0：状态管理（`stores/vault` / `tabs` / `theme` / `markingStyle` / `plannerCategories` / `projectView` / `taskView`）。
 - `dayjs` 1.11：日期。
 - `vite` 7.2 + `@vitejs/plugin-react` 5.1：构建。
 - `vitest` 4 + `@vitest/coverage-v8`：单测 + 覆盖率。
-- `@tauri-apps/api` 2.9 + 插件：IPC。
+- `@tauri-apps/api` 2.9 + 插件（dialog/fs/opener/shell）：IPC；后端另用 `tauri-plugin-notification` 发桌面通知（任务到期提醒）。
 
 ### Application Architecture
 
 四层（见 `structure.md`）：
 
 ```
-UI 层（React + antd）
+UI 层（React + antd + TipTap WYSIWYG 编辑）
   → Tauri 命令层（Rust #[tauri::command]，IPC 边界）
-    → Vault 数据层（Rust：walkdir 扫描 / 契约驱动分层解析 / SQLite 索引 / notify 增量）
+    → Vault 数据层（Rust：walkdir 扫描 / 契约驱动分层解析 / SQLite 索引 / notify 增量 / 行级 CRUD 写回 / 移动感知 / OKR 提取 / 到期提醒）
+      → 内置 AI 层（M4 已落地：AiClient trait + providers，主线/教练/明日一句，未配 key 降级启发式）
       → Agent 接口层（已实现：export_life_state 写 app_data_dir/agent/{LIFE-STATE.md, state.json}；inbox 写回规划中）
 ```
 
@@ -53,11 +56,11 @@ IPC 边界约定：Tauri v2 自动做参数名 `camelCase ↔ snake_case` 转换
 
 ### Data Storage
 - **唯一真相源**：本地 markdown 文件（vault，如 `~/wiki`），与 Obsidian 共存。
-- **派生缓存**：SQLite（`<app_data_dir>/helmose.db`），存 vaults / notes / tasks / events / projects / okrs / entities / links / tomorrow_sentences / life_state_snapshots，外加 `notes_fts`（FTS5 trigram，已由 `search_notes` 命令暴露给前端）。WAL 模式 + busy_timeout 5000ms。
+- **派生缓存**：SQLite（`<app_data_dir>/helmose.db`），存 vaults / notes / tasks / events / projects / okrs（M1 KR section 已填充）/ entities / links / reminders（M2 到期提醒）/ tomorrow_sentences / life_state_snapshots / ai_generations（M4 AI 结果缓存，按 vault+date+feature UNIQUE upsert），外加 `notes_fts`（FTS5 trigram，已由 `search_notes` 命令暴露给前端）。WAL 模式 + busy_timeout 5000ms。
 - **可重建**：删库后重新 `index_vault` 即可全量恢复。
 
 ### External Integrations
-- **AI（规划 v0.2）**：主线判定 / 每日建议 / 明日一句；当前版本不含 LLM 调用。
+- **AI 教练层（M4，已落地）**：`services/ai/` 抽象层（`AiClient` trait + `providers/`：Claude / OpenAI，留 Ollama 扩展点）+ 三个命令 `ai_mainline` / `ai_coach` / `ai_tomorrow`；数据最小化（只发聚合摘要、user 上限 4k、绝不发 vault 原文）+ 30s 超时；未配 key / LLM 失败 → 本地启发式 → `ai_generations` 缓存 → 空态，结果带 `source=ai|heuristic` 标降级。key 存 `app_data_dir/config.json`（Unix 0600，不入 vault 不入 git）。
 - **外部智能体**：通过 `LIFE-STATE.md` / `state.json` 文件接口（`export_life_state` 已实现导出至 `app_data_dir/agent/`）；inbox 写回带保护（规划中）。
 
 ## Development Environment
@@ -111,12 +114,15 @@ IPC 边界约定：Tauri v2 自动做参数名 `camelCase ↔ snake_case` 转换
 6. **契约取代 `layers.rs` 硬编码**：旧 `layers.rs` 用编号前缀（0-日志/1-我/…）判层级，目录重构即失效。现改为 `services/contract/mod.rs` 内置 ~/wiki/规范.md 契约（顶层目录 + 12 种 type（含 log）+ type→dir 映射），`infer_note_type` / `infer_layer` 纯函数驱动，indexer 与 scaffold 共用同一真相源。
 7. **排除目录收口到 `utils/exclude.rs`**：原本 `index.rs` / `library.rs` 各持一份 `EXCLUDE_DIRS` 易漂移；现统一为单一契约点，三处调用方共用 `is_excluded_*`。
 8. **`content_hash`(sha256) 作 note 主键**：正文 sha256（规范化：去 BOM / LF 统一 / 去 trailing 空白）作 `notes.id` 主键，移动 / 重命名不变 id；watcher 增量按 hash 跳过未变文件。碰撞（重复内容）加 `#短哈希` 消歧，`notes.content_hash` 列始终存纯 hash。
+9. **TipTap 替换 CodeMirror（WYSIWYG 富文本）**：CodeMirror 是分屏 md 源码编辑，符号噪音大；TipTap v3 + `@tiptap/markdown` 实现 WYSIWYG（所见即所得），对外仍是 markdown 字符串，`save_note_content` / indexer / md-preview 全链路零改动。配套 `unescapeWikilink` 还原 `@tiptap/markdown` 对 `[[wikilink]]` 成对括号的转义（防双链/反链/图谱断链 + 防污染 vault 原文，违反铁律 2）。
+10. **AI 抽象层 trait（Dyn-safe）+ 降级链**：`AiClient` trait 让 provider 切换零业务改动（Claude / OpenAI / 未来 Ollama 本地）；`build_client` 未配 key 返 None 触发本地启发式降级；LLM 失败 → `ai_generations` 缓存 → 空态，绝不 panic；数据最小化（只接聚合摘要，user 上限 4k 截断，绝不发 vault 原文）+ 30s 超时防慢拖死前端；`AiSettings` 手写 Debug 屏蔽 api_key 防日志泄漏。
 
 ## Known Limitations
-- **okrs 表未填充**：`okrs` 表 schema 已建（`services/database.rs`），但缺 indexer 解析与命令查询（OKR/key-result 全链路留后续 spec）。
-- **AI 教练层未接（v0.2）**：当前版本无 LLM 调用；`export_life_state` 已产出机器可读 `state.json`，但主线判定 / 每日建议 / 明日一句的 AI 生成尚待 v0.2。
 - **Agent inbox 写回未实现**：状态导出已落地，外部智能体产出的写回审核流待做。
-- **可视化编辑未做**：当前为 CodeMirror 文本编辑 + 写回；按 type 的可视化编辑（OKR 进度条 / 项目看板）留后续。
-- **移动/重命名移动感知未做**：反链 / 前向链已实现，但 Move/Rename 命令 + 引用自动更新留后续。
+- **按 type 的可视化编辑未做**：当前为 TipTap WYSIWYG 富文本编辑 + 行级 CRUD 写回；按 type 路由的可视化形态（OKR 进度条 / 项目看板）留后续。
+- **AI 提醒参数固定**：`commands/reminders.rs` 当前固定 LEAD_DAYS=1 / REMIND_HOUR=9（截止前一天 9:00），未接 settings 暴露可配。
+- **AI provider 仅云端**：`services/ai/providers` 已留 Ollama 本地扩展点但未接（当前仅 Claude / OpenAI 云端）。
+- **events 未关联项目**：事件按笔记独立解析，`events.project_id` 关联映射未做。
+- **前向链接 dangling 无提示**：前向链接只显示已解析目标，未对悬空目标（目标笔记不存在）给出提示。
 - **updater endpoint/pubkey 占位**：自动更新框架已接（`tauri-plugin-updater` + `check_update` 命令 + SettingsPage 按钮），真实 endpoint/pubkey 发布时配。
 - **bundle 未拆分**：vendor 未 manualChunks 拆分（当前 1.78MB，桌面应用本地加载可接受）。

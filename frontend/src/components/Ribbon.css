@@ -40,8 +40,20 @@
   color: var(--ob-text);
 }
 .ob-ribbon-btn.active {
+  position: relative;
   color: var(--ob-accent);
   background: var(--ob-accent-mod);
+}
+/* active 左侧 2px 主色 indicator（专业克制，非整块紫）*/
+.ob-ribbon-btn.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--ob-accent);
+  border-radius: var(--ob-radius);
 }
 .ob-ribbon-label {
   font-size: 10px;

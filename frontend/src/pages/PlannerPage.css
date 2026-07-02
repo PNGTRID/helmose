@@ -1,0 +1,920 @@
+/* ============================================================
+   PlannerPage · 今日计划：三栏布局 + 四象限 + 详情面板
+   样式照搬 task-planner-preview.html，类名 planner- 前缀。
+   复用全局 --ob-* 变量；新增 --q1..q4 四象限配色（页内局部，暗色 html.dark 覆盖）。
+   ============================================================ */
+.planner-page {
+  --q1: #dc2626; /* 重要且紧急 · 红 */
+  --q2: #0891b2; /* 重要不紧急 · 青（避开海蓝主色）*/
+  --q3: #d97706; /* 紧急不重要 · 黄 */
+  --q4: #16a34a; /* 不重要不紧急 · 绿 */
+  display: grid;
+  grid-template-columns: 250px 1fr 320px;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ob-bg);
+}
+html.dark .planner-page {
+  --q1: #f87171;
+  --q2: #22d3ee;
+  --q3: #fbbf24;
+  --q4: #4ade80;
+}
+
+/* 三栏共用 */
+.planner-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  min-width: 0; /* grid item 默认 min-width:auto 会被内容撑开，致 1fr 列无法收缩（窄屏四象限被挤没） */
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+/* 面板（Obsidian Card） */
+.planner-panel {
+  background: var(--ob-bg);
+  border: 1px solid var(--ob-border);
+  border-radius: var(--ob-radius);
+  padding: 12px;
+}
+.planner-panel-title {
+  font-size: 12px;
+  color: var(--ob-text-muted);
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ============ 左栏：收集箱 ============ */
+.planner-inbox {
+  background: var(--ob-accent-mod);
+  border: 1px solid transparent;
+  border-radius: var(--ob-radius);
+  padding: 12px;
+}
+.planner-inbox-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.planner-inbox-title {
+  font-size: 13px;
+  color: var(--ob-accent-hover);
+  font-weight: 600;
+}
+.planner-inbox-count {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--ob-accent);
+  line-height: 1;
+}
+.planner-inbox-foot {
+  font-size: 11px;
+  color: var(--ob-text-muted);
+  margin-top: 3px;
+}
+
+/* ============ 左栏：分类列表 ============ */
+.planner-cat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.planner-cat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.planner-cat-item:hover {
+  background: var(--ob-bg-mod-hover);
+}
+.planner-cat-item.active {
+  background: var(--ob-accent-mod);
+}
+.planner-cat-item.active .planner-cat-name {
+  color: var(--ob-accent);
+}
+.planner-cat-emoji {
+  font-size: 14px;
+  width: 18px;
+  text-align: center;
+}
+.planner-cat-name {
+  flex: 1;
+  font-size: 13px;
+}
+.planner-cat-count {
+  font-size: 11px;
+  color: var(--ob-text-faint);
+}
+.planner-cat-del {
+  border: 1px solid var(--ob-border);
+  background: var(--ob-bg);
+  color: var(--ob-text-muted);
+  border-radius: 3px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0;
+  transition: all 0.12s;
+}
+.planner-cat-item:hover .planner-cat-del {
+  opacity: 1;
+}
+.planner-cat-del:hover {
+  border-color: var(--q1);
+  color: var(--q1);
+}
+.planner-new-cat {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px;
+  border: 1px dashed var(--ob-border-strong);
+  background: transparent;
+  border-radius: 4px;
+  color: var(--ob-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.planner-new-cat:hover {
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+  background: var(--ob-accent-mod);
+}
+
+/* ============ 左栏：迷你日历 ============ */
+.planner-cal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.planner-cal-month {
+  font-size: 13px;
+  font-weight: 600;
+}
+.planner-cal-nav {
+  display: flex;
+  gap: 4px;
+}
+.planner-cal-nav button {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--ob-border);
+  background: var(--ob-bg);
+  color: var(--ob-text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+.planner-cal-nav button:hover {
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+}
+.planner-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+}
+.planner-cal-wk {
+  text-align: center;
+  font-size: 10px;
+  color: var(--ob-text-faint);
+  padding: 3px 0;
+}
+.planner-cal-wk.weekend {
+  color: var(--q1);
+}
+.planner-cal-day {
+  position: relative;
+  text-align: center;
+  font-size: 11px;
+  padding: 5px 0;
+  cursor: pointer;
+  border-radius: 4px;
+  color: var(--ob-text);
+}
+.planner-cal-day:hover {
+  background: var(--ob-bg-mod-hover);
+}
+.planner-cal-day.other {
+  color: var(--ob-text-faint);
+}
+.planner-cal-day.today {
+  background: var(--ob-accent);
+  color: #fff;
+  font-weight: 600;
+}
+.planner-cal-day.selected {
+  background: var(--ob-accent-mod);
+  color: var(--ob-accent);
+  font-weight: 600;
+}
+.planner-cal-dot {
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--q1);
+}
+.planner-cal-day.today .planner-cal-dot {
+  background: #fff;
+}
+
+/* ============ 中栏 ============ */
+.planner-center {
+  gap: 12px;
+}
+
+/* 四象限 2x2（占满中栏剩余高度） */
+.planner-quads {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.planner-quads-loading {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 2;
+}
+.planner-quad {
+  position: relative;
+  background: var(--ob-bg);
+  border: 2px solid;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.planner-quad.q1 {
+  border-color: var(--q1);
+}
+.planner-quad.q2 {
+  border-color: var(--q2);
+}
+.planner-quad.q3 {
+  border-color: var(--q3);
+}
+.planner-quad.q4 {
+  border-color: var(--q4);
+}
+/* isOver 按象限原色 inset 加深（替换旧紫色外阴影），落点一目了然 */
+.planner-quad.q1.over {
+  box-shadow: inset 0 0 0 3px var(--q1);
+}
+.planner-quad.q2.over {
+  box-shadow: inset 0 0 0 3px var(--q2);
+}
+.planner-quad.q3.over {
+  box-shadow: inset 0 0 0 3px var(--q3);
+}
+.planner-quad.q4.over {
+  box-shadow: inset 0 0 0 3px var(--q4);
+}
+.planner-quad-decor {
+  position: absolute;
+  right: -6px;
+  bottom: -10px;
+  font-size: 72px;
+  opacity: 0.12;
+  pointer-events: none;
+  user-select: none;
+}
+.planner-quad-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--ob-border);
+}
+.planner-quad-emoji {
+  font-size: 15px;
+}
+.planner-quad-name {
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+}
+.planner-quad-tag {
+  font-size: 10px;
+  color: var(--ob-text-faint);
+}
+.planner-quad-sub {
+  font-size: 11px;
+  color: var(--ob-text-muted);
+  margin: -4px 0 6px;
+}
+.planner-quad-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  z-index: 1;
+}
+.planner-empty-tip {
+  color: var(--ob-text-faint);
+  font-size: 12px;
+  text-align: center;
+  padding: 10px 0;
+}
+.planner-drag-hint {
+  padding: 6px 10px;
+  background: var(--ob-accent);
+  color: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+}
+/* DragOverlay 克隆任务卡（拖拽中态）：提起感 rotate(2°) + e4 深阴影，可见所拖对象 */
+.planner-card-overlay {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 8px 12px;
+  background: var(--ob-bg);
+  border: 1px solid var(--ob-accent);
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(15, 16, 18, 0.18), 0 4px 12px rgba(15, 16, 18, 0.1);
+  transform: rotate(2deg);
+  font-size: 13px;
+  color: var(--ob-text);
+  cursor: grabbing;
+}
+.planner-card-overlay-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 详情面板自动保存细字提示（替代旧版"保存"假按钮，占主按钮位让删除/更多靠右）*/
+.planner-detail-autosave {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--ob-text-faint);
+  font-size: 12px;
+}
+
+/* 任务卡 */
+.planner-task-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px 9px;
+  background: var(--ob-bg);
+  border: 1px solid var(--ob-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.planner-task-card:hover {
+  border-color: var(--ob-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.planner-task-card.selected {
+  border-color: var(--ob-accent);
+  background: var(--ob-accent-mod);
+}
+.planner-task-card.dragging {
+  opacity: 0.5;
+}
+.planner-ck {
+  margin-top: 2px;
+  accent-color: var(--ob-accent);
+  cursor: pointer;
+}
+.planner-task-main {
+  flex: 1;
+  min-width: 0;
+}
+.planner-collection-badge {
+  margin-right: 4px;
+  opacity: 0.85;
+}
+.planner-tc-title {
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.planner-tc-title.done {
+  color: var(--ob-text-faint);
+  text-decoration: line-through;
+}
+.planner-tc-meta {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--ob-text-muted);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.planner-tc-meta .overdue {
+  color: var(--q1);
+}
+
+/* 底部输入条 */
+.planner-quickadd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--ob-bg-mod);
+  border: 1px solid var(--ob-border);
+  border-radius: var(--ob-radius);
+  padding: 7px 10px;
+  flex-shrink: 0;
+}
+.planner-qa-plus {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ob-accent);
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.planner-qa-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  color: var(--ob-text);
+}
+.planner-qa-input::placeholder {
+  color: var(--ob-text-faint);
+}
+.planner-qa-tools {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.planner-qa-tool {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--ob-text-muted);
+}
+.planner-qa-date {
+  width: 30px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--ob-text-muted);
+  font-size: 14px;
+  padding: 0;
+}
+.planner-qa-clear {
+  border: 1px solid var(--ob-border);
+  background: var(--ob-bg);
+  color: var(--ob-text-muted);
+  border-radius: 3px;
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+/* ============ 右栏：详情 ============ */
+.planner-detail-empty {
+  flex: 1;
+  display: flex;
+}
+.planner-detail-empty-inner {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--ob-text-faint);
+  font-size: 13px;
+  padding: 20px;
+}
+.planner-detail-big {
+  font-size: 40px;
+  opacity: 0.5;
+}
+.planner-detail-hint {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.planner-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.planner-detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ob-border);
+  margin-bottom: 12px;
+}
+.planner-detail-emoji {
+  font-size: 18px;
+  padding-top: 2px;
+}
+.planner-detail-main {
+  flex: 1;
+  min-width: 0;
+}
+.planner-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.planner-detail-title {
+  font-weight: 600;
+  font-size: 15px;
+  flex: 1;
+}
+.planner-quad-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: #fff;
+  white-space: nowrap;
+}
+.planner-quad-badge.q1 {
+  background: var(--q1);
+}
+.planner-quad-badge.q2 {
+  background: var(--q2);
+}
+.planner-quad-badge.q3 {
+  background: var(--q3);
+}
+.planner-quad-badge.q4 {
+  background: var(--q4);
+}
+.planner-detail-sub {
+  font-size: 11px;
+  color: var(--ob-text-muted);
+  margin-top: 3px;
+}
+.planner-detail-close {
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  color: var(--ob-text-faint);
+  cursor: pointer;
+  line-height: 1;
+}
+.planner-detail-close:hover {
+  color: var(--ob-text);
+}
+.planner-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* 字段 */
+.planner-field {
+  margin-bottom: 14px;
+}
+.planner-field-label {
+  font-size: 12px;
+  color: var(--ob-text-muted);
+  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.planner-field-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--ob-border);
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  background: var(--ob-bg-mod);
+  color: var(--ob-text);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.planner-field-input:focus {
+  border-color: var(--ob-accent);
+  box-shadow: var(--ob-ring-focus);
+  background: var(--ob-bg);
+}
+.planner-field-input:disabled {
+  color: var(--ob-text-faint);
+  cursor: not-allowed;
+}
+.planner-desc-input {
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.5;
+}
+/* 子计划新增输入（虚线提示样式，聚焦变实） */
+.planner-add-sub-row {
+  margin-top: 6px;
+}
+.planner-add-sub-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px dashed var(--ob-border-strong);
+  background: var(--ob-bg-mod);
+  border-radius: 4px;
+  outline: none;
+  font-size: 13px;
+  color: var(--ob-text);
+  transition: border-color 0.15s;
+}
+.planner-add-sub-input:focus {
+  border-color: var(--ob-accent);
+  border-style: solid;
+}
+/* 计划分类属性行：当前推导依据 */
+.planner-cat-current {
+  font-size: 11px;
+  color: var(--ob-text-faint);
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+/* 期限快捷 */
+.planner-date-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.planner-date-chip {
+  border: 1px solid var(--ob-border);
+  background: var(--ob-bg);
+  color: var(--ob-text-muted);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  position: relative;
+  overflow: hidden;
+}
+.planner-date-chip:hover {
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+}
+.planner-date-chip.active {
+  background: var(--ob-accent-mod);
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+  font-weight: 500;
+}
+/* 「选择日期」chip 内嵌 input[type=date]，点击 chip 触发原生选择器 */
+.planner-date-chip input[type="date"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+/* 属性行 ▶ 可展开 */
+.planner-attr-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 10px;
+  border: 1px solid var(--ob-border);
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 6px;
+  transition: all 0.12s;
+}
+.planner-attr-row:hover {
+  background: var(--ob-bg-mod-hover);
+}
+.planner-attr-row.open {
+  border-color: var(--ob-accent);
+  background: var(--ob-accent-mod);
+}
+.planner-attr-label {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.planner-attr-value {
+  font-size: 12px;
+  color: var(--ob-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.planner-attr-arrow {
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+.planner-attr-row.open .planner-attr-arrow {
+  transform: rotate(90deg);
+}
+.planner-attr-options {
+  display: none;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 4px 0 10px 4px;
+}
+.planner-attr-options.show {
+  display: flex;
+}
+.planner-attr-note {
+  font-size: 11px;
+  color: var(--ob-text-faint);
+  line-height: 1.5;
+}
+.planner-opt-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.planner-opt-chip {
+  border: 1px solid var(--ob-border);
+  background: var(--ob-bg);
+  color: var(--ob-text-muted);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.planner-opt-chip:hover {
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+}
+.planner-opt-chip.active {
+  background: var(--ob-accent-mod);
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+}
+.planner-opt-chip.q1 {
+  border-left: 3px solid var(--q1);
+}
+.planner-opt-chip.q2 {
+  border-left: 3px solid var(--q2);
+}
+.planner-opt-chip.q3 {
+  border-left: 3px solid var(--q3);
+}
+.planner-opt-chip.q4 {
+  border-left: 3px solid var(--q4);
+}
+
+/* 子计划 */
+.planner-sub-list {
+  display: flex;
+  flex-direction: column;
+}
+.planner-sub-empty {
+  font-size: 12px;
+  color: var(--ob-text-faint);
+  padding: 4px 0;
+}
+.planner-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--ob-border);
+}
+.planner-sub-row:last-child {
+  border-bottom: none;
+}
+.planner-sub-text {
+  flex: 1;
+  font-size: 13px;
+  word-break: break-word;
+}
+.planner-sub-text.done {
+  color: var(--ob-text-faint);
+  text-decoration: line-through;
+}
+.planner-sub-del {
+  border: 1px solid var(--ob-border);
+  background: var(--ob-bg);
+  color: var(--ob-text-muted);
+  border-radius: 3px;
+  width: 18px;
+  height: 18px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.planner-sub-del:hover {
+  border-color: var(--q1);
+  color: var(--q1);
+}
+.planner-add-sub {
+  width: 100%;
+  padding: 7px;
+  border: 1px dashed var(--ob-border-strong);
+  background: var(--ob-bg-mod);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--ob-text-muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+.planner-add-sub:hover {
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+}
+
+/* 详情底栏 */
+.planner-detail-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ob-border);
+  margin-top: 10px;
+}
+.planner-btn {
+  padding: 6px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  border: 1px solid var(--ob-border);
+  background: var(--ob-bg);
+  color: var(--ob-text);
+}
+.planner-btn:hover {
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+}
+.planner-btn-primary {
+  background: var(--ob-accent);
+  color: #fff;
+  border-color: var(--ob-accent);
+}
+.planner-btn-primary:hover {
+  background: var(--ob-accent-hover);
+  border-color: var(--ob-accent-hover);
+  color: #fff;
+}
+.planner-btn-block {
+  flex: 1;
+}
+.planner-icon-only {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--ob-border);
+  background: var(--ob-bg);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--ob-text-muted);
+  font-size: 16px;
+}
+.planner-icon-only:hover:not(:disabled) {
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+}
+.planner-icon-only:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 窄屏 grid 列由 JS（ResizeObserver + isNarrow inline style）控制，确保基于页面自身宽度
+   （已扣 Ribbon/FilePanel）判断，而非 window 宽度——避免 FilePanel 占位导致误判、四象限被挤没。 */

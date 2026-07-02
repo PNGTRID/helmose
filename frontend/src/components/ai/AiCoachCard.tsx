@@ -2,7 +2,7 @@
 // 三卡独立 loading / 降级态（source 标 ai / heuristic / cached）。
 // 未配 key 由父组件显「去设置」降级态卡，本组件假定已配 key 才挂载。
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Button,
@@ -27,6 +27,31 @@ import type {
 } from "../../types";
 
 const { Text, Paragraph } = Typography;
+
+// AI 三卡结果本地缓存（localStorage）：挂载先读作 initial，消除每次进页空白等待。
+// 后端 ai_coach/ai_mainline/ai_tomorrow 内部已有降级链（AI→heuristic→cache），但前端命令每次都重跑；
+// 这里在前端再兜一层"上次结果"，跨会话瞬时显示，用户主动点「刷新/重新生成」拉最新。
+const cacheKey = (vaultId: string) => `helmose-ai-cache-${vaultId}`;
+interface AiCache {
+  mainline?: AiMainline | null;
+  coach?: AiCoachResult | null;
+  tomorrow?: AiTomorrowResult | null;
+}
+function readAiCache(vaultId: string): AiCache {
+  try {
+    return JSON.parse(localStorage.getItem(cacheKey(vaultId)) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+function writeAiCache(vaultId: string, patch: Partial<AiCache>) {
+  try {
+    const cur = readAiCache(vaultId);
+    localStorage.setItem(cacheKey(vaultId), JSON.stringify({ ...cur, ...patch }));
+  } catch {
+    /* localStorage 不可用时静默（隐私模式等）*/
+  }
+}
 
 /** source 文本 → (颜色, 中文标签)。heuristic/cached 灰色，ai 蓝色亮显 */
 function sourceTag(source: string): { color: string; label: string } {
@@ -68,17 +93,24 @@ export default function AiCoachCard({
   initialCoach = null,
   initialTomorrow = null,
 }: AiCoachCardProps) {
+  // 挂载先读 localStorage 缓存作 initial（父组件未传 initial 时兜底，消除空白等待）
+  const cache = useMemo(() => readAiCache(vaultId), [vaultId]);
+
   // —— 主线判定 ——
-  const [mainline, setMainline] = useState<AiMainline | null>(initialMainline);
+  const [mainline, setMainline] = useState<AiMainline | null>(
+    initialMainline ?? cache.mainline ?? null
+  );
   const [mainlineLoading, setMainlineLoading] = useState(false);
 
   // —— 每日教练 ——
-  const [coach, setCoach] = useState<AiCoachResult | null>(initialCoach);
+  const [coach, setCoach] = useState<AiCoachResult | null>(
+    initialCoach ?? cache.coach ?? null
+  );
   const [coachLoading, setCoachLoading] = useState(false);
 
   // —— 明日一句 ——
   const [tomorrow, setTomorrow] = useState<AiTomorrowResult | null>(
-    initialTomorrow
+    initialTomorrow ?? cache.tomorrow ?? null
   );
   const [tomorrowLoading, setTomorrowLoading] = useState(false);
   const [editingTomorrow, setEditingTomorrow] = useState(false);
@@ -89,6 +121,7 @@ export default function AiCoachCard({
     try {
       const r = await api.aiMainline(vaultId);
       setMainline(r);
+      writeAiCache(vaultId, { mainline: r });
     } catch (e) {
       message.error(`主线判定失败：${e}`);
     } finally {
@@ -101,6 +134,7 @@ export default function AiCoachCard({
     try {
       const r = await api.aiCoach(vaultId);
       setCoach(r);
+      writeAiCache(vaultId, { coach: r });
     } catch (e) {
       message.error(`教练建议失败：${e}`);
     } finally {
@@ -113,6 +147,7 @@ export default function AiCoachCard({
     try {
       const r = await api.aiTomorrow(vaultId);
       setTomorrow(r);
+      writeAiCache(vaultId, { tomorrow: r });
     } catch (e) {
       message.error(`生成明日一句失败：${e}`);
     } finally {
@@ -133,6 +168,7 @@ export default function AiCoachCard({
     try {
       const r = await api.updateTomorrowSentence(tomorrow.note_id, draft);
       setTomorrow(r);
+      writeAiCache(vaultId, { tomorrow: r });
       setEditingTomorrow(false);
       message.success("已保存");
     } catch (e) {

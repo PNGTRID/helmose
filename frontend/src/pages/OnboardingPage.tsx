@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Alert, Button, Card, Input, Space, Typography, message } from "antd";
 import { FolderOpenOutlined } from "@ant-design/icons";
+import AppIcon from "../components/AppIcon";
 import { exists } from "@tauri-apps/plugin-fs";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
@@ -108,7 +109,7 @@ export default function OnboardingPage() {
     <div style={{ maxWidth: 560, margin: "60px auto" }}>
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
         <div style={{ textAlign: "center" }}>
-          <Title level={2}>⚓ 欢迎使用 Helmose</Title>
+          <Title level={2}><AppIcon name="anchor" size={28} /> 欢迎使用 Helmose</Title>
           <Text type="secondary">选择你的笔记文件夹（vault），把人生整理成清晰的舵盘</Text>
         </div>
 
@@ -153,7 +154,7 @@ export default function OnboardingPage() {
             </Button>
 
             <Button block size="large" loading={busy} onClick={createNew}>
-              ✨ 新建知识库（生成 00~09 骨架）
+              <AppIcon name="plus" size={14} /> 新建知识库（生成 00~09 骨架）
             </Button>
             <Text type="secondary" style={{ fontSize: 12 }}>
               选一个空文件夹，Helmose 按规范生成目录骨架与模板；已有 vault 请用上方「添加并索引」。

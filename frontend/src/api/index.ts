@@ -2,6 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { getMarkingStyle } from '../stores/markingStyle';
 import type { AgentExport, AiCoachResult, AiMainline, AiSettings, AiTomorrowResult, Backlink, BackupInfo, Event, GraphData, IndexStats, MoveResult, Note, NoteContent, NoteMeta, Okr, Project, ProjectProgress, RefLoc, Reminder, ScaffoldStats, SearchResult, TagCount, Task, UpdateStatus, Vault, VaultInput } from '../types';
 
 export async function ping(): Promise<string> {
@@ -209,6 +210,16 @@ export async function deleteLine(
   return invoke<NoteContent>('delete_line', { noteId, sourceLine });
 }
 
+/** 在指定行（1-based 去fm正文行号）之后插入新行。
+ *  子计划新增用：父任务行后插缩进 checkbox 子任务（indexer 按「最近非缩进父」归属）。 */
+export async function insertLineAfter(
+  noteId: string,
+  afterLine: number,
+  text: string
+): Promise<NoteContent> {
+  return invoke<NoteContent>('insert_line_after', { noteId, afterLine, text });
+}
+
 /** 向指定 section 末尾追加 bullet（asTask=true 任务 `- [ ]`，false 事件 `-`） */
 export async function appendBullet(
   noteId: string,
@@ -359,7 +370,7 @@ export async function setTaskPriority(
   sourceLine: number,
   priority: number
 ): Promise<NoteContent> {
-  return invoke<NoteContent>('set_task_priority', { noteId, sourceLine, priority });
+  return invoke<NoteContent>('set_task_priority', { noteId, sourceLine, priority, markingStyle: getMarkingStyle() });
 }
 
 /** 改任务紧急度（'high' 加 🔥，其他删 🔥）。四象限拖拽 / 行内 🔥 切换触发。
@@ -369,7 +380,7 @@ export async function setTaskUrgency(
   sourceLine: number,
   urgency: string
 ): Promise<NoteContent> {
-  return invoke<NoteContent>('set_task_urgency', { noteId, sourceLine, urgency });
+  return invoke<NoteContent>('set_task_urgency', { noteId, sourceLine, urgency, markingStyle: getMarkingStyle() });
 }
 
 // ============================================================

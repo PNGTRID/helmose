@@ -1,37 +1,28 @@
 // 顶部标签页栏（Obsidian 式多 tab）+ 右键菜单（关闭其他/右侧/全部）
+// 图标统一走 AppIcon（name 注册表），收敛直 import。
 import "./TabBar.css";
 import { Dropdown } from "antd";
-import {
-  ApartmentOutlined,
-  AimOutlined,
-  CheckSquareOutlined,
-  CloseOutlined,
-  FileTextOutlined,
-  ProjectOutlined,
-  SettingOutlined,
-  CalendarOutlined,
-  BookOutlined,
-} from "@ant-design/icons";
+import AppIcon from "./AppIcon";
 import { useTabsStore, type Tab } from "../stores/tabs";
 
 function iconFor(t: Tab) {
   switch (t.type) {
     case "note":
-      return <FileTextOutlined />;
+      return <AppIcon name="note" size={14} />;
     case "graph":
-      return <ApartmentOutlined />;
+      return <AppIcon name="graph" size={14} />;
     case "today":
-      return <AimOutlined />;
+      return <AppIcon name="today" size={14} />;
     case "tasks":
-      return <CheckSquareOutlined />;
+      return <AppIcon name="task" size={14} />;
     case "projects":
-      return <ProjectOutlined />;
+      return <AppIcon name="project" size={14} />;
     case "calendar":
-      return <CalendarOutlined />;
+      return <AppIcon name="calendar" size={14} />;
     case "journal":
-      return <BookOutlined />;
+      return <AppIcon name="journal" size={14} />;
     case "settings":
-      return <SettingOutlined />;
+      return <AppIcon name="setting" size={14} />;
   }
 }
 
@@ -74,7 +65,7 @@ export default function TabBar() {
                 close(t.id);
               }}
             >
-              <CloseOutlined />
+              <AppIcon name="close" size={12} />
             </span>
           </div>
         </Dropdown>
@@ -82,4 +73,3 @@ export default function TabBar() {
     </div>
   );
 }
-

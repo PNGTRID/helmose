@@ -9,7 +9,7 @@
 }
 
 .cal-cell-today {
-  background: var(--ob-bg-today, rgba(124, 58, 237, 0.08));
+  background: var(--ob-bg-today, rgba(3, 105, 161, 0.08));
 }
 
 /* 事件标题列表（最多 2 条，超出 +N） */
@@ -54,7 +54,7 @@
   height: 18px;
   border-radius: 50%;
   border: none;
-  background: #7c3aed;
+  background: var(--ob-accent);
   color: #fff;
   font-size: 12px;
   line-height: 1;
@@ -71,7 +71,7 @@
 }
 
 .cal-add-btn:hover {
-  background: #6d28d9;
+  background: var(--ob-accent-hover);
 }
 
 /* M3 拖拽视觉：单元格悬停高亮 + 事件拖动态 */

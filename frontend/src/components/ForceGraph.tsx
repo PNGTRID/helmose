@@ -4,6 +4,7 @@
 
 import { useEffect, useRef } from "react";
 import { useThemeStore } from "../stores/theme";
+import { tokens, darkTokens } from "../theme/tokens";
 import type { GraphData, GraphNode } from "../types";
 
 interface SimNode {
@@ -93,10 +94,11 @@ export default function ForceGraph({
     };
     resize();
 
+    // canvas 取色直读 tokens（不能用 CSS 变量字符串），与主色海蓝统一
     const colors = () =>
       themeRef.current === "dark"
-        ? { node: "#9d7cf0", nodeHover: "#b394f5", edge: "#3c3c3c", hoverRing: "#b394f5" }
-        : { node: "#1677ff", nodeHover: "#4096ff", edge: "#c8c8c8", hoverRing: "#4096ff" };
+        ? { node: darkTokens.color.accent, nodeHover: darkTokens.color.accentHover, edge: darkTokens.color.border, hoverRing: darkTokens.color.accentHover }
+        : { node: tokens.color.accent, nodeHover: tokens.color.accentHover, edge: tokens.color.border, hoverRing: tokens.color.accentHover };
 
     const step = () => {
       const sim = simRef.current;

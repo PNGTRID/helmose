@@ -4,6 +4,7 @@
 // 今日笔记按钮 / 主线项目点击 → NoteEditorDrawer（不跳 tab）。竞态：useEffect cancelled flag。
 
 import { useEffect, useRef, useState } from "react";
+import AppIcon from "../components/AppIcon";
 import {
   Alert,
   Button,
@@ -236,7 +237,7 @@ export default function TodayPage() {
       {yesterdaySentence && (
         <Card>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            ⚓ 昨日定下的今日寄语
+            <AppIcon name="anchor" size={12} /> 昨日定下的今日寄语
           </Typography.Text>
           <div style={{ fontSize: 18, marginTop: 4 }}>{yesterdaySentence}</div>
         </Card>

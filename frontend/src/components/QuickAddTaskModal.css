@@ -22,7 +22,7 @@
 .qa-task-text:focus {
   outline: none;
   border-color: var(--ob-accent);
-  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.15);
+  box-shadow: var(--ob-ring-focus);
 }
 
 .qa-task-row {

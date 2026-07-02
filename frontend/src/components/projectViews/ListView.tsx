@@ -5,6 +5,7 @@ import { Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { relativeTime } from "../../utils/date";
 import { priorityLabel, statusColor, statusLabel } from "./shared";
+import AppIcon from "../../components/AppIcon";
 import type { Project } from "../../types";
 
 const { Text } = Typography;
@@ -50,7 +51,7 @@ export default function ListView({ projects, onOpen }: Props) {
       key: "is_mainline",
       width: 56,
       align: "center" as const,
-      render: (_, r) => (r.is_mainline ? <Text type="success">✓</Text> : null),
+      render: (_, r) => (r.is_mainline ? <AppIcon name="check" size={14} color="#52c41a" /> : null),
     },
     {
       title: "OKR",

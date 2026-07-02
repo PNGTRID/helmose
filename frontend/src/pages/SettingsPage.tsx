@@ -9,6 +9,7 @@ import {
   List,
   Popconfirm,
   Radio,
+  Segmented,
   Space,
   Switch,
   Tag,
@@ -16,9 +17,11 @@ import {
   message,
 } from "antd";
 import { DeleteOutlined, ExportOutlined, ReloadOutlined, SaveOutlined, SyncOutlined } from "@ant-design/icons";
+import AppIcon from "../components/AppIcon";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import type { AgentExport, AiSettings, BackupInfo, UpdateStatus } from "../types";
+import { useMarkingStyleStore, type MarkingStyle } from "../stores/markingStyle";
 
 const { Text } = Typography;
 
@@ -37,6 +40,9 @@ export default function SettingsPage() {
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [aiForm] = Form.useForm<AiSettings>();
   const [aiSaving, setAiSaving] = useState(false);
+  // —— 任务标记风格（helmose 文字 / obsidian emoji）——
+  const markingStyle = useMarkingStyleStore((s) => s.style);
+  const setMarkingStyle = useMarkingStyleStore((s) => s.setStyle);
 
   if (!vault) return null;
 
@@ -180,6 +186,23 @@ export default function SettingsPage() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
+      <Card title="任务标记风格">
+        <Space direction="vertical" size="small" style={{ width: "100%" }}>
+          <Segmented
+            value={markingStyle}
+            onChange={(v) => setMarkingStyle(v as MarkingStyle)}
+            options={[
+              { label: "Helmose 标准（文字 due:/priority:）", value: "helmose" },
+              { label: "Obsidian 兼容（emoji 📅⏫）", value: "obsidian" },
+            ]}
+          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            新建/编辑任务时写入 vault 的标记格式。Helmose 标准为独立文字契约（默认，对 Agent 更友好）；
+            Obsidian 兼容对齐 Tasks 插件（双端互通）。存量任务不受影响（读侧三格式全兼容）。
+          </Text>
+        </Space>
+      </Card>
+
       <Card title="当前 Vault">
         <Descriptions column={1} size="small">
           <Descriptions.Item label="名称">{vault.name}</Descriptions.Item>
@@ -324,7 +347,7 @@ export default function SettingsPage() {
               style={{ fontSize: 12 }}
             >
               {updateStatus.available
-                ? `✓ ${updateStatus.message}`
+                ? (<><AppIcon name="check" size={12} color="#52c41a" /> {updateStatus.message}</>)
                 : updateStatus.message}
             </Text>
           )}

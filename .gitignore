@@ -28,6 +28,7 @@ Thumbs.db
 
 # Agent/IDE 工具本地状态
 .serena/
+.playwright-mcp/
 
 # 日志
 *.log

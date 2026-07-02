@@ -28,12 +28,13 @@ body,
   --ob-text: #333333;
   --ob-text-muted: #6b7280;
   --ob-text-faint: #9ca3af;
-  --ob-accent: #7c3aed;
-  --ob-accent-hover: #6d28d9;
-  --ob-accent-mod: #f3eeff;
+  --ob-accent: #0369a1;
+  --ob-accent-hover: #075985;
+  --ob-accent-mod: #e0f2fe;
   --ob-tab-active-bg: #ffffff;
   --ob-tab-bg: #f0f0f2;
   --ob-radius: 6px;
+  --ob-ring-focus: 0 0 0 2px rgba(3, 105, 161, 0.15);
 }
 
 /* 暗色模式：html.dark 覆盖 --ob-* 变量（由 stores/theme.ts 切换 class）。
@@ -48,11 +49,12 @@ html.dark {
   --ob-text: #d4d4d4;
   --ob-text-muted: #9ca3af;
   --ob-text-faint: #6b7280;
-  --ob-accent: #9d7cf0;
-  --ob-accent-hover: #b394f5;
-  --ob-accent-mod: #2d2440;
+  --ob-accent: #38bdf8;
+  --ob-accent-hover: #7dd3fc;
+  --ob-accent-mod: #082f49;
   --ob-tab-active-bg: #1e1e1e;
   --ob-tab-bg: #2a2a2c;
+  --ob-ring-focus: 0 0 0 2px rgba(56, 189, 248, 0.25);
 }
 
 body {
@@ -86,7 +88,7 @@ kbd {
   border-radius: 4px;
 }
 .ob-app ::-webkit-scrollbar-thumb:hover {
-  background: #b8b8b8;
+  background: var(--ob-text-faint);
 }
 .ob-app ::-webkit-scrollbar-track {
   background: transparent;
@@ -256,4 +258,31 @@ kbd {
 .ob-file-sub {
   font-size: 11px;
   color: var(--ob-text-faint);
+}
+
+/* ============================================================
+   动效工具类（基于 motion token；尊重 prefers-reduced-motion 无障碍）
+   ============================================================ */
+.ob-fade-in {
+  animation: ob-fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ob-slide-up {
+  animation: ob-slide-up 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes ob-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ob-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

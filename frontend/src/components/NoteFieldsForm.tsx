@@ -4,6 +4,7 @@
 // 即时反馈：每个字段 useState 维护，onChange 先 setState 再异步写回；key={noteId} 时重置。
 import { useState } from "react";
 import { AutoComplete, DatePicker, Input, InputNumber, Rate, Select, Slider, Space, Switch, message } from "antd";
+import { SmileOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import * as api from "../api";
 import { useActiveProjects } from "../hooks/useActiveProjects";
@@ -144,8 +145,8 @@ const REVIEW_TYPE_OPTIONS = [
   { value: "学习", label: "学习" },
 ];
 
-/** 心情 emoji 字符（Rate character） */
-const MOOD_EMOJI = "😊";
+/** 心情图标（Rate character，原 emoji 已替换为 antd 图标） */
+const MOOD_ICON = <SmileOutlined />;
 
 /** 日志/经历笔记字段表单：日期 + 心情 + 精力 + 天气 + 复盘类型 + 关联项目。
  *  写回经 patchFrontmatter（mood/energy/weather/review_type）+ setTag（project）。
@@ -213,7 +214,7 @@ function LogFieldsForm({
           {/* 再次点击当前星可清零（v=0 → 清空 mood）；antd 6 Rate 默认支持点击同值归零 */}
           <Rate
             count={5}
-            character={MOOD_EMOJI}
+            character={MOOD_ICON}
             value={mood ?? 0}
             onChange={(v) => {
               const n = v === 0 ? null : v;

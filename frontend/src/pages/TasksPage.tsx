@@ -12,6 +12,7 @@ import { useTaskViewStore, type TaskView, type TaskGroupBy } from "../stores/tas
 import { useWikilinkNavigation } from "../hooks/useWikilinkNavigation";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import DataState from "../components/DataState";
+import AppIcon from "../components/AppIcon";
 import TaskForm from "../components/TaskForm";
 import ListView from "../components/tasks/ListView";
 import KanbanView from "../components/tasks/KanbanView";
@@ -23,10 +24,10 @@ import { computeUrgencyMap } from "../utils/taskGrouping";
 const { Text, Title } = Typography;
 
 const VIEW_OPTIONS = [
-  { label: "📋 列表", value: "list" as const },
-  { label: "🗂 看板", value: "kanban" as const },
-  { label: "🎯 四象限", value: "matrix" as const },
-  { label: "📅 时间线", value: "timeline" as const },
+  { label: (<><AppIcon name="list" size={13} /> 列表</>), value: "list" as const },
+  { label: (<><AppIcon name="apps" size={13} /> 看板</>), value: "kanban" as const },
+  { label: (<><AppIcon name="aim" size={13} /> 四象限</>), value: "matrix" as const },
+  { label: (<><AppIcon name="clock" size={13} /> 时间线</>), value: "timeline" as const },
 ];
 
 export default function TasksPage() {

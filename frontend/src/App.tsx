@@ -18,6 +18,8 @@ import GraphPage from "./pages/GraphPage";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { openOrCreateTodayNote } from "./utils/note";
 import TasksPage from "./pages/TasksPage";
+import PlannerPage from "./pages/PlannerPage";
+import AppIcon from "./components/AppIcon";
 import TodayPage from "./pages/TodayPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import CalendarPage from "./pages/CalendarPage";
@@ -43,6 +45,14 @@ export default function App() {
       await load();
       const v = useVaultStore.getState().vault;
       if (!v) return;
+      // urgency 三态迁移（Blocker #1 方案 B）：存量 urgency="low"（无标记旧默认值）需刷新为 ""（未设），
+      // 否则 computeUrgencyMap 会把存量今天/本周到期任务误当显式 low 压制。首次启动强制全量重索引一次。
+      const MIGRATION_KEY = "helmose-urgency-3state-v1";
+      if (localStorage.getItem(MIGRATION_KEY) !== "1") {
+        const stats = await useVaultStore.getState().index();
+        if (stats) localStorage.setItem(MIGRATION_KEY, "1"); // 索引成功才标记，失败下次启动重试
+        return;
+      }
       if (!v.last_indexed) {
         useVaultStore.getState().index();
       } else {
@@ -170,7 +180,7 @@ export default function App() {
     if (!active) {
       return (
         <div className="ob-empty">
-          <div style={{ fontSize: 28 }}>⚓</div>
+          <div style={{ fontSize: 28, display: "inline-flex" }}><AppIcon name="anchor" size={28} /></div>
           <div>用 Ctrl/⌘+P 搜索，或点击左侧文件树打开笔记</div>
         </div>
       );
@@ -184,6 +194,8 @@ export default function App() {
         return <TodayPage />;
       case "tasks":
         return <TasksPage />;
+      case "planner":
+        return <PlannerPage />;
       case "projects":
         return <ProjectsPage />;
       case "calendar":

@@ -20,14 +20,18 @@ Helmose（helm = 舵手）是一个 **AI 驱动的人生知识库桌面应用**�
 
 ## Key Features
 
-按版本里程碑（当前 **v0.1**）：
+按能力域（已落地为主）：
 
 1. **Obsidian 式 vault 接入**：直接读写本地 markdown 文件夹，与 Obsidian 共存（不破坏原文）。首次启动引导选择已有 vault，或用脚手架 `scaffold_vault` 新建 Life OS 目录骨架。
 2. **分层索引引擎（Rust，契约驱动）**：按规范.md 契约把 vault 全量 md 解析成结构化数据（笔记 / 任务 / wikilink / frontmatter / type / 分层 L1-L3），写入 SQLite 派生索引；`notify` 文件监听 + `content_hash`(sha256) 增量更新。
-3. **文档库（Obsidian 式工作台）**：Ribbon + 可拖拽文件树 + 标签页 + markdown 预览 + 反向链接面板 + 关系图谱；支持 CodeMirror 编辑写回（写前 `.helmose/backup` 备份）。
+3. **文档库（Obsidian 式工作台）**：Ribbon + 可拖拽文件树（虚拟列表）+ 标签页 + markdown 预览 + 反向链接 / 前向链接面板 + 关系图谱；**TipTap WYSIWYG 富文本编辑写回**（替换 CodeMirror，所见即所得，写前 `.helmose/backup` 备份，`unescapeWikilink` 防双链转义）。
 4. **全库搜索**：基于 `notes_fts`（FTS5 trigram）的全文搜索，命令面板 Ctrl/⌘+P 触发，命中关键词高亮 snippet。
-5. **今日聚焦（教练面板）**：v0.1 显示索引统计 + 待办任务；v0.2 接 AI 给出主线判定与教练建议。
-6. **Agent 状态接口**：`export_life_state` 聚合后写 `app_data_dir/agent/{LIFE-STATE.md（人读）, state.json（机读）}`，供外部智能体定时读取；inbox 写回带保护（规划中）。
+5. **结构化提取**：projects 深度结构化（priority / mainline / top-3 兜底）/ events 时间线 / tasks due_date / **OKR（KR section 提取）** / 明日一句 / 项目进度聚合（运行时聚合不入 fm）。
+6. **任务管理 + 标记文字化**：任务多视图（看板 / 列表 / 矩阵 / 时间线）；标记 Postel 法则（读侧三格式全兼容：Helmose 老 emoji / Obsidian Tasks 标准 / Helmose 文字，写侧默认文字契约，双模式开关可切 Obsidian 互通）；**任务到期提醒**（扫 due 幂等生成 + `tauri-plugin-notification` 桌面通知）。
+7. **行级就地写入 + 移动感知**：行级 insert/update/delete/append + frontmatter patch + set_tag（全经 save 收口 = 备份 + 重索引）；`move_note` / `rename_note` + 路径型引用（`[文本](path)` / `[[path]]`）经用户授权后批量更新。
+8. **今日计划页 PlannerPage**：三栏（收集箱 / 分类 / 迷你日历）+ 四象限拖拽（写回复用 set_task_priority/urgency）+ 详情面板；分类软方案（localStorage 自定义分类 + 项目/文件夹/tag 映射，不落库不改 schema）。
+9. **AI 教练层（M4，已落地）**：主线判定 / 每日建议 / 明日一句；`AiClient` trait provider 可替换（Claude / OpenAI，留 Ollama 本地扩展点），数据最小化（只发聚合摘要、user 上限 4k、绝不发 vault 原文）+ 30s 超时；未配 key / LLM 失败 → 本地启发式 → `ai_generations` 缓存 → 空态；key 存 `app_data_dir/config.json`（Unix 0600，不入 vault 不入 git）。
+10. **Agent 状态接口**：`export_life_state` 聚合后写 `app_data_dir/agent/{LIFE-STATE.md（人读）, state.json（机读）}`，供外部智能体定时读取；inbox 写回带保护（规划中）。
 
 ## Business Objectives
 
@@ -39,7 +43,7 @@ Helmose（helm = 舵手）是一个 **AI 驱动的人生知识库桌面应用**�
 
 - **索引完整性**：vault 全量 md（~1.9 万篇）100% 入库，索引耗时 < 10s。
 - **浏览可用性**：文档库任意目录的文件列表 < 200ms 响应；单篇预览 < 100ms。
-- **AI 消费就绪**：`export_life_state` 已产出 `LIFE-STATE.md` + `state.json`；外部智能体据此正确判断"当前主线 + 今日该做什么"为 v0.2 验收项。
+- **AI 消费就绪**：`export_life_state` 已产出 `LIFE-STATE.md` + `state.json`；内置 AI 教练层（M4）已落地主线判定 / 每日建议 / 明日一句，未配 key 自动降级本地启发式，结果带 `source=ai|heuristic` 标降级。
 - **原文零破坏**：除用户明确编辑动作（`save_note_content`，写前 `.helmose/backup` 备份）外，索引/查询/浏览全只读，不修改 vault md 原文。
 
 ## Product Principles
@@ -58,8 +62,9 @@ Helmose（helm = 舵手）是一个 **AI 驱动的人生知识库桌面应用**�
 ## Future Vision
 
 ### Potential Enhancements
-- **AI 教练层（v0.2）**：主线判定、每日教练建议、明日一句。
-- **Agent 写回 inbox**：外部智能体产出经审核后写入 vault。
-- **可视化编辑**：按 type 路由（OKR 进度条 / 项目看板 / 任务勾选），结构化写回 markdown。
-- **okrs 全链路**：OKR / key-result 解析 + 查询 + 看板（`okrs` 表 schema 已就绪，待 indexer 填充）。
-- **引用完整性移动感知**：Move / Rename 命令 + 路径型引用自动更新（不断链）。
+- **Agent 写回 inbox**：外部智能体产出经审核后写入 vault（状态导出已落地，写回未做）。
+- **AI 提醒可配置**：当前 reminders 固定提前 1 天 9:00，后续接 settings 暴露 lead_days / remind_hour。
+- **AI provider 扩展**：`services/ai/providers` 留 Ollama 本地扩展点（本地闭环、零外发），尚未接入。
+- **events 关联项目**：`events.project_id` 关联映射未做（当前事件按笔记独立解析，未挂项目）。
+- **前向链接 dangling 提示**：当前只显示已解析的前向链接，未对悬空目标（目标笔记不存在）给出提示。
+- **可视化编辑扩展**：按 type 路由（OKR 进度条 / 项目看板）结构化写回 markdown（行级 CRUD 与 TipTap WYSIWYG 已落地，按 type 的可视化形态留后续）。

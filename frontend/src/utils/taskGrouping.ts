@@ -133,32 +133,27 @@ export function classifyQuadrant(task: Task, effUrgency: "high" | "mid" | "low")
   return "q4";
 }
 
-/** 紧急度派生：手动 🔥（task.urgency==='high'）覆盖；否则按 due_date 推导
- *  （逾期/今天=high，本周=mid，之后/无=low）。key=task.id。 */
+/** 单任务有效紧急度（三态口径，所有消费点统一，Blocker #1 方案 B）：
+ *  - urgency==="high" → high（显式紧急，强制）
+ *  - urgency==="low"  → low（显式不紧急，压制 due_date 派生——「今天到期但不紧急」可表达）
+ *  - ""（未设）→ due_date 派生：逾期/今天=high，本周=mid，之后/无/无效=low */
+export function effectiveUrgency(task: Task): "high" | "mid" | "low" {
+  if (task.urgency === "high") return "high";
+  if (task.urgency === "low") return "low";
+  if (!task.due_date) return "low";
+  const startToday = startOfToday();
+  const ts = dueTimestamp(task.due_date);
+  if (isNaN(ts)) return "low";
+  if (ts < startToday + DAY_MS) return "high"; // 逾期 + 今天
+  if (ts < startToday + 7 * DAY_MS) return "mid"; // 本周内
+  return "low";
+}
+
+/** 批量紧急度派生（复用 effectiveUrgency 单任务口径，保证矩阵/列表/详情同源）。key=task.id。 */
 export function computeUrgencyMap(tasks: Task[]): Map<string, "high" | "mid" | "low"> {
   const m = new Map<string, "high" | "mid" | "low">();
-  const startToday = startOfToday();
-  const weekEnd = startToday + 7 * DAY_MS;
   for (const t of tasks) {
-    if (t.urgency === "high") {
-      m.set(t.id, "high");
-      continue;
-    }
-    if (!t.due_date) {
-      m.set(t.id, "low");
-      continue;
-    }
-    const ts = dueTimestamp(t.due_date);
-    if (isNaN(ts)) {
-      m.set(t.id, "low");
-    } else if (ts < startToday + DAY_MS) {
-      // 逾期 + 今天
-      m.set(t.id, "high");
-    } else if (ts < weekEnd) {
-      m.set(t.id, "mid");
-    } else {
-      m.set(t.id, "low");
-    }
+    m.set(t.id, effectiveUrgency(t));
   }
   return m;
 }

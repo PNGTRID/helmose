@@ -13,6 +13,7 @@ import "./CalendarPage.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Calendar, Empty, List, message, Popconfirm, Popover, Space, Spin, Tag, Typography } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import AppIcon from "../components/AppIcon";
 import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
 import {
@@ -329,7 +330,7 @@ export default function CalendarPage() {
           }}
         >
           <Text strong style={{ display: "block", marginBottom: 6, fontSize: 13 }}>
-            📋 任务（拖到日历排时间块）
+            <AppIcon name="task" size={13} /> 任务（拖到日历排时间块）
           </Text>
           <Text type="secondary" style={{ fontSize: 11, display: "block", marginBottom: 8 }}>
             拖任务到日期格 → 自动写「关键事件」时间块
@@ -396,7 +397,7 @@ export default function CalendarPage() {
                       +
                     </button>
                     {dayNotes.length > 0 && (
-                      <Badge count={dayNotes.length} style={{ backgroundColor: "#7C3AED" }} />
+                      <Badge count={dayNotes.length} style={{ backgroundColor: "var(--ob-accent)" }} />
                     )}
                     {dayEvents.length > 0 && (
                       <div className="cal-event-list">

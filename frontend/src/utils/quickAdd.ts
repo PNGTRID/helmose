@@ -5,6 +5,9 @@
 //   · 行首 HH:MM[-HH:MM]（events.rs 时间解析）
 //   · ⭐ priority（数 1-3）/ 🔥 urgency high / 🔄 status doing（indexer tasks.rs 已识别）
 
+import { getMarkingStyle, MARKING_STYLE_OBSIDIAN } from "../stores/markingStyle";
+import type { MarkingStyle } from "../stores/markingStyle";
+
 /** dayjs 实例序列化为 YYYY-MM-DD（无效返回 undefined）。 */
 function toDateIso(d: { format: (f: string) => string } | null | undefined): string | undefined {
   return d ? d.format("YYYY-MM-DD") : undefined;
@@ -15,48 +18,63 @@ function toTimeStr(d: { format: (f: string) => string } | null | undefined): str
   return d ? d.format("HH:mm") : undefined;
 }
 
-/** 紧急程度标记映射（indexer 已识别 🔥 = high，其余无 emoji）。 */
-const URGENCY_EMOJI: Record<string, string> = {
-  high: "🔥",
-  mid: "",
-  low: "",
-};
-
 /**
  * 拼装待办 bullet 文本（追加到「今日待办」section 末尾）。
- * bullet 约定与 indexer tasks.rs / library set_task_* 同口径（单一源，避免散落手拼）：
+ * 写侧按 markingStyle 输出（未传则读全局 markingStyle store，默认 helmose 文字标准）；
+ * 读侧 indexer 三格式全兼容（见 tasks.rs）。
+ *
+ * helmose 模式（独立契约，默认）：
  *   · 前缀：done→`[x]` / doing→`[/]` / todo→`[ ]`
- *   · 📅 YYYY-MM-DD（due_date）/ ⭐×N（priority 1-3，clamp）/ 🔥（urgency high）/ #project:{name}
- *   · 🔁 every <rule>（repeat_rule；rule 取后端 normalize_repeat_rule 接受值：day/week/month/Mon-Sun）
- * @param text 任务内容
- * @param dueDate 截止日期（dayjs 或 YYYY-MM-DD 字符串），可选
- * @param urgency 紧急程度 'high'|'mid'|'low'，可选
- * @param projectName 关联项目名（#project:{name} 标签），可选
- * @param priority 优先级 0-3（0/不传=不加 ⭐），可选
- * @param status 状态 'todo'|'doing'|'done'，可选（默认 todo → `[ ]`）
- * @param repeatRule 重复规则（'day'|'week'|'month'|'Mon'-'Sun'），可选；对齐后端 normalize_repeat_rule
- * @returns 单行 bullet，如 `- [/] 写周报 📅 2026-07-01 🔁 every week ⭐⭐ 🔥 #project:Helmose`
+ *   · due:YYYY-MM-DD / priority:N(1-3,3=最高) / urgency:high(手动二值) / repeat:<rule> / #project:{name}
+ *
+ * obsidian 模式（对齐 Obsidian Tasks 插件，双端互通）：
+ *   · 📅 YYYY-MM-DD / ⏫🔼🔽(3/2/1) / 🔁 every <rule> / #project:{name}
+ *   · urgency：Obsidian Tasks 无此概念，写 🔥（Helmose 扩展；Obsidian Tasks 忽略，Helmose 读侧识别）
+ *
+ * @param opts 任务字段对象（text 必填，余可选；详见 BuildTaskBulletOptions）
+ * @returns 单行 bullet，如 helmose `- [/] 写周报 due:2026-07-01 repeat:week priority:3 urgency:high #project:Helmose`
  */
-export function buildTaskBullet(
-  text: string,
-  dueDate?: { format: (f: string) => string } | string | null,
-  urgency?: "high" | "mid" | "low" | null,
-  projectName?: string | null,
-  priority?: number | null,
-  status?: "todo" | "doing" | "done" | null,
-  repeatRule?: string | null
-): string {
+export interface BuildTaskBulletOptions {
+  text: string;
+  /** 截止日期（dayjs 实例或 YYYY-MM-DD 字符串） */
+  dueDate?: { format: (f: string) => string } | string | null;
+  /** 紧急度：'high'|'low' 显式入 bullet；'mid'|'' 未设由前端 due_date 派生，不入 bullet（三态，Blocker #1） */
+  urgency?: "high" | "mid" | "low" | "" | null;
+  /** 关联项目名（#project:{name} 标签） */
+  projectName?: string | null;
+  /** 优先级 0-3（0/不传=不加标记） */
+  priority?: number | null;
+  /** 状态 'todo'|'doing'|'done'，默认 todo → `[ ]` */
+  status?: "todo" | "doing" | "done" | null;
+  /** 重复规则（'day'|'week'|'month'|'Mon'-'Sun'），对齐后端 normalize_repeat_rule */
+  repeatRule?: string | null;
+  /** 标记风格，默认 "helmose"（独立自建定位） */
+  markingStyle?: MarkingStyle;
+}
+
+export function buildTaskBullet(opts: BuildTaskBulletOptions): string {
+  const { text, dueDate, urgency, projectName, priority, status, repeatRule, markingStyle } = opts;
+  // 未传 markingStyle → 读全局设置（stores/markingStyle，默认 helmose 独立契约）
+  const style = markingStyle ?? getMarkingStyle();
   const prefix = status === "done" ? "- [x]" : status === "doing" ? "- [/]" : "- [ ]";
   const parts: string[] = [`${prefix} ${text}`];
   const due = typeof dueDate === "string" ? dueDate : toDateIso(dueDate);
-  if (due) parts.push(`📅 ${due}`);
-  // 重复规则紧跟 due_date（toggle_task 重复推进读当前 due → 推进时一并替换）。
+  const obs = style === MARKING_STYLE_OBSIDIAN;
+  if (due) parts.push(obs ? `📅 ${due}` : `due:${due}`);
+  // 重复规则紧跟 due（toggle_task 重复推进读当前 due → 推进时一并替换）。
   // 仅接受后端 normalize_repeat_rule 认可的值，过滤脏值避免污染 bullet。
   if (repeatRule && REPEAT_RULE_VALUES.has(repeatRule)) {
-    parts.push(`🔁 every ${repeatRule}`);
+    parts.push(obs ? `🔁 every ${repeatRule}` : `repeat:${repeatRule}`);
   }
-  if (priority && priority > 0) parts.push("⭐".repeat(Math.min(priority, 3)));
-  if (urgency && URGENCY_EMOJI[urgency]) parts.push(URGENCY_EMOJI[urgency]);
+  if (priority && priority > 0) {
+    const p = Math.min(priority, 3);
+    // obsidian 模式用 Obsidian Tasks 标准 ⏫🔼🔽（让 Tasks 插件识别）；helmose 用 priority:N
+    parts.push(obs ? (p === 3 ? "⏫" : p === 2 ? "🔼" : "🔽") : `priority:${p}`);
+  }
+  // urgency 三态（Blocker #1 方案 B）：high/low 显式入 bullet；未设（""/null/mid）不入，前端 due_date 派生。
+  // low 两模式统一 urgency:low 文字（Obsidian Tasks 插件无 low emoji 对应，文字互通）。
+  if (urgency === "high") parts.push(obs ? "🔥" : "urgency:high");
+  else if (urgency === "low") parts.push("urgency:low");
   if (projectName && projectName.trim()) parts.push(`#project:${projectName.trim()}`);
   return parts.join(" ");
 }
