@@ -4,17 +4,21 @@ import {
   Card,
   Descriptions,
   Empty,
+  Form,
+  Input,
   List,
   Popconfirm,
+  Radio,
   Space,
+  Switch,
   Tag,
   Typography,
   message,
 } from "antd";
-import { DeleteOutlined, ExportOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { DeleteOutlined, ExportOutlined, ReloadOutlined, SaveOutlined, SyncOutlined } from "@ant-design/icons";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
-import type { AgentExport, BackupInfo, UpdateStatus } from "../types";
+import type { AgentExport, AiSettings, BackupInfo, UpdateStatus } from "../types";
 
 const { Text } = Typography;
 
@@ -29,6 +33,10 @@ export default function SettingsPage() {
   const [loadingBackups, setLoadingBackups] = useState(false);
   const [typeStats, setTypeStats] = useState<Record<string, number>>({});
   const [trash, setTrash] = useState<BackupInfo[]>([]);
+  // —— AI 配置 ——
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+  const [aiForm] = Form.useForm<AiSettings>();
+  const [aiSaving, setAiSaving] = useState(false);
 
   if (!vault) return null;
 
@@ -59,6 +67,13 @@ export default function SettingsPage() {
     if (vault) {
       api.getNotesStats(vault.id).then(setTypeStats).catch(() => setTypeStats({}));
     }
+    // 加载 AI 设置（首次进入即填入表单）
+    api.getAiSettings()
+      .then((s) => {
+        setAiSettings(s);
+        aiForm.setFieldsValue(s);
+      })
+      .catch(() => setAiSettings(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault?.id]);
 
@@ -141,6 +156,28 @@ export default function SettingsPage() {
     }
   };
 
+  // 保存 AI 配置：合并 form 值写 config.json
+  const saveAiSettings = async () => {
+    try {
+      const values = await aiForm.validateFields();
+      setAiSaving(true);
+      const updated = await api.setAiSettings({
+        provider: values.provider,
+        api_key: values.api_key ?? "",
+        enabled: !!values.enabled,
+      });
+      setAiSettings(updated);
+      aiForm.setFieldsValue(updated);
+      message.success("AI 配置已保存");
+    } catch (e) {
+      // validateFields 抛 ValidationError（无 errorFields 字段时为真实异常）
+      if (e && typeof e === "object" && "errorFields" in e) return;
+      message.error(`保存失败：${e}`);
+    } finally {
+      setAiSaving(false);
+    }
+  };
+
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Card title="当前 Vault">
@@ -174,6 +211,64 @@ export default function SettingsPage() {
                   ))}
           </Descriptions.Item>
         </Descriptions>
+      </Card>
+
+      <Card
+        title="AI 教练配置"
+        extra={
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={aiSaving}
+            onClick={saveAiSettings}
+          >
+            保存
+          </Button>
+        }
+      >
+        <Form
+          form={aiForm}
+          layout="vertical"
+          initialValues={
+            aiSettings ?? { provider: "claude", api_key: "", enabled: false }
+          }
+        >
+          <Form.Item
+            name="enabled"
+            label="启用 AI"
+            valuePropName="checked"
+            tooltip="关闭后所有 AI 命令走本地启发式降级"
+          >
+            <Switch checkedChildren="开" unCheckedChildren="关" />
+          </Form.Item>
+          <Form.Item
+            name="provider"
+            label="AI 服务商"
+            tooltip="选 Claude 或 OpenAI；其他/未知会走降级"
+          >
+            <Radio.Group>
+              <Radio value="claude">Claude（Anthropic）</Radio>
+              <Radio value="openai">OpenAI</Radio>
+            </Radio.Group>
+          </Form.Item>
+          <Form.Item
+            name="api_key"
+            label="API Key"
+            tooltip="仅存本机 app_data_dir/config.json，不入 vault 不入 git"
+          >
+            <Input.Password
+              placeholder="sk-..."
+              autoComplete="off"
+              visibilityToggle
+            />
+          </Form.Item>
+        </Form>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          · key 仅存本机 <Text code>app_data_dir/config.json</Text>，
+          <Text strong>不入 vault 不入 git</Text>。
+          <br />· 未填 key 或关闭启用 → 所有 AI 命令自动走本地启发式降级
+         （TodayPage 卡片标「本地推断」灰色标签）。
+        </Text>
       </Card>
 
       <Card title="Agent 状态导出">

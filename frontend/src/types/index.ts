@@ -54,6 +54,24 @@ export interface Task {
   priority: number;
   /** M3：紧急度（low | mid | high，🔥 = high）。派生（按 due_date 推导）只在前端。 */
   urgency: string;
+  /** M2：重复规则（day/week/month/Mon-Sun）。null=非重复。 */
+  repeat_rule: string | null;
+  /** M2：父任务 id（缩进子任务指向最近非缩进父）。null=顶层任务。 */
+  parent_task_id: string | null;
+}
+
+/** M2：到期提醒（对齐 reminders 表，snake_case） */
+export interface Reminder {
+  id: string;
+  task_id: string;
+  note_id: string;
+  vault_id: string;
+  /** 触发时间 ISO8601 */
+  remind_at: string;
+  fired: boolean;
+  task_text: string;
+  due_date: string | null;
+  created_at: string;
 }
 
 export interface IndexStats {
@@ -116,11 +134,16 @@ export interface AgentExport {
   total_notes: number;
 }
 
-/** 反向链接：源笔记 + 链接文本 */
+/** 反向链接：源笔记 + 链接文本。
+ *  同时复用为前向链接（source = 目标 note 元数据）。
+ *  is_dangling：前向链接独有——target 解析不到笔记（[[不存在的笔记]]）时为 true，
+ *  此时 source.id 为空、source.file_name 用 target_text 占位（前端按 is_dangling 渲染灰色「未解析」）。
+ *  反向链接恒为 false（target = note_id 本身，必然已解析）。 */
 export interface Backlink {
   source: NoteMeta;
   target_text: string;
   alias: string | null;
+  is_dangling: boolean;
 }
 
 /** 图谱节点 */
@@ -193,6 +216,51 @@ export interface Event {
   source_line: number | null;
 }
 
+/** M1：OKR（strategy / project 文档的「关键结果」section 提取） */
+export interface Okr {
+  id: string;
+  vault_id: string;
+  source_note_id: string;
+  /** 形如 2026Q3（来自 frontmatter.quarter 或 section 标题） */
+  quarter: string | null;
+  /** 目标 */
+  objective: string;
+  /** P0 / P1 / P2 / P3（缺省 P2） */
+  priority: string;
+  /** 关键结果 bullet 文本 */
+  kr_text: string | null;
+  /** 目标值（含可选单位「万千亿」字样） */
+  target_value: string | null;
+  /** 当前进度值 */
+  current_value: string | null;
+  /** 原始行内容（与 kr_text 同源） */
+  raw_row: string | null;
+}
+
+/** M1：路径型引用位置（move_note 检测 / apply_ref_updates 入参） */
+export interface RefLoc {
+  /** 引用所在笔记的 id（待更新的文档） */
+  note_id: string;
+  /** 引用所在行号（1-based） */
+  line: number;
+  /** 旧路径（出现在原文里） */
+  old_path: string;
+  /** 新路径（替换目标） */
+  new_path: string;
+}
+
+/** M1：移动/重命名笔记结果 */
+export interface MoveResult {
+  /** 移动后的 note id（content_hash 不变 → 通常不变） */
+  note_id: string;
+  /** 新相对路径 */
+  new_rel_path: string;
+  /** 旧相对路径 */
+  old_rel_path: string;
+  /** 检测到的路径型引用，需 apply_ref_updates 授权后改原文 */
+  refs_to_update: RefLoc[];
+}
+
 /** 脚手架生成统计（onboarding「创建知识库」） */
 export interface ScaffoldStats {
   root_path: string;
@@ -213,4 +281,38 @@ export interface BackupInfo {
   name: string;
   size: number;
   mtime: string;
+}
+
+// ============================================================
+// M4：AI 教练层（types 对齐后端 snake_case DTO）
+// ============================================================
+
+/** AI 配置（敏感：api_key 存 app_data_dir/config.json，不入 vault 不入 git） */
+export interface AiSettings {
+  /** "claude" | "openai"（未知 → build_client None，走降级） */
+  provider: string;
+  /** API key（空 → 走本地启发式降级） */
+  api_key: string;
+  /** 是否启用 AI（false → build_client None） */
+  enabled: boolean;
+}
+
+/** AI 主线判定结果。source 标降级链：ai / heuristic / cached */
+export interface AiMainline {
+  project_name: string;
+  reason: string;
+  source: string;
+}
+
+/** AI 每日教练建议。source 标降级链：ai / heuristic / cached */
+export interface AiCoachResult {
+  text: string;
+  source: string;
+}
+
+/** AI 明日一句结果（写回当日笔记「明日一句」section + tomorrow_sentences 表） */
+export interface AiTomorrowResult {
+  sentence: string;
+  source: string;
+  note_id: string;
 }

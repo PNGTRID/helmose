@@ -74,12 +74,17 @@ pub struct SearchResult {
 }
 
 /// 反向链接：源笔记元数据 + 链接文本（「谁链接了本笔记」）
+/// 同时复用为前向链接（source = 目标 note 元数据）。
+/// is_dangling：前向链接独有语义——target 解析不到笔记（[[不存在的笔记]]）时为 true。
+///   反向链接（get_backlinks）恒为 false（target = note_id 本身，必然已解析）。
+///   dangling 时 source.id 为空串、rel_path/file_name 等用 target_text 占位（前端按 is_dangling 渲染灰色「未解析」）。
 #[derive(Debug, Clone, Serialize)]
 pub struct Backlink {
     pub source: NoteMeta,
     /// 在源笔记里写的 [[target_text]] 或 [[target_text|alias]]
     pub target_text: String,
     pub alias: Option<String>,
+    pub is_dangling: bool,
 }
 
 /// 图谱节点（双链可视化用）

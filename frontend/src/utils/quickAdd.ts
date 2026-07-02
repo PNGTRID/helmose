@@ -27,13 +27,15 @@ const URGENCY_EMOJI: Record<string, string> = {
  * bullet 约定与 indexer tasks.rs / library set_task_* 同口径（单一源，避免散落手拼）：
  *   · 前缀：done→`[x]` / doing→`[/]` / todo→`[ ]`
  *   · 📅 YYYY-MM-DD（due_date）/ ⭐×N（priority 1-3，clamp）/ 🔥（urgency high）/ #project:{name}
+ *   · 🔁 every <rule>（repeat_rule；rule 取后端 normalize_repeat_rule 接受值：day/week/month/Mon-Sun）
  * @param text 任务内容
  * @param dueDate 截止日期（dayjs 或 YYYY-MM-DD 字符串），可选
  * @param urgency 紧急程度 'high'|'mid'|'low'，可选
  * @param projectName 关联项目名（#project:{name} 标签），可选
  * @param priority 优先级 0-3（0/不传=不加 ⭐），可选
  * @param status 状态 'todo'|'doing'|'done'，可选（默认 todo → `[ ]`）
- * @returns 单行 bullet，如 `- [/] 写周报 📅 2026-07-01 ⭐⭐ 🔥 #project:Helmose`
+ * @param repeatRule 重复规则（'day'|'week'|'month'|'Mon'-'Sun'），可选；对齐后端 normalize_repeat_rule
+ * @returns 单行 bullet，如 `- [/] 写周报 📅 2026-07-01 🔁 every week ⭐⭐ 🔥 #project:Helmose`
  */
 export function buildTaskBullet(
   text: string,
@@ -41,17 +43,42 @@ export function buildTaskBullet(
   urgency?: "high" | "mid" | "low" | null,
   projectName?: string | null,
   priority?: number | null,
-  status?: "todo" | "doing" | "done" | null
+  status?: "todo" | "doing" | "done" | null,
+  repeatRule?: string | null
 ): string {
   const prefix = status === "done" ? "- [x]" : status === "doing" ? "- [/]" : "- [ ]";
   const parts: string[] = [`${prefix} ${text}`];
   const due = typeof dueDate === "string" ? dueDate : toDateIso(dueDate);
   if (due) parts.push(`📅 ${due}`);
+  // 重复规则紧跟 due_date（toggle_task 重复推进读当前 due → 推进时一并替换）。
+  // 仅接受后端 normalize_repeat_rule 认可的值，过滤脏值避免污染 bullet。
+  if (repeatRule && REPEAT_RULE_VALUES.has(repeatRule)) {
+    parts.push(`🔁 every ${repeatRule}`);
+  }
   if (priority && priority > 0) parts.push("⭐".repeat(Math.min(priority, 3)));
   if (urgency && URGENCY_EMOJI[urgency]) parts.push(URGENCY_EMOJI[urgency]);
   if (projectName && projectName.trim()) parts.push(`#project:${projectName.trim()}`);
   return parts.join(" ");
 }
+
+/**
+ * 后端 normalize_repeat_rule 接受的标准重复规则白名单。
+ * 与 src-tauri/src/services/indexer/tasks.rs normalize_repeat_rule 严格对齐：
+ * day / week / month / Mon / Tue / Wed / Thu / Fri / Sat / Sun。
+ * 前端下拉选项必须映射到这 10 个之一，否则 buildTaskBullet 会忽略。
+ */
+export const REPEAT_RULE_VALUES = new Set([
+  "day",
+  "week",
+  "month",
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri",
+  "Sat",
+  "Sun",
+]);
 
 /**
  * 拼装事件 bullet 文本（追加到「关键事件 / 时间线」section 末尾）。

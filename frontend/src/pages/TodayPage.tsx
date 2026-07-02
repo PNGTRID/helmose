@@ -28,6 +28,7 @@ import {
   FileAddOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import * as api from "../api";
@@ -40,7 +41,8 @@ import NoteEditorDrawer from "../components/NoteEditorDrawer";
 import QuickAddTaskModal from "../components/QuickAddTaskModal";
 import QuickAddEventModal from "../components/QuickAddEventModal";
 import QuickAddProjectModal from "../components/QuickAddProjectModal";
-import type { Event, Project, Task } from "../types";
+import AiCoachCard from "../components/ai/AiCoachCard";
+import type { AiSettings, Event, Project, Task } from "../types";
 
 const { Text } = Typography;
 
@@ -61,6 +63,8 @@ export default function TodayPage() {
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [eventModalOpen, setEventModalOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
+  // M4：AI 设置（决定显降级态卡还是 AiCoachCard 三卡）
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
 
   const today = dayjs().format("YYYY-MM-DD");
 
@@ -99,6 +103,8 @@ export default function TodayPage() {
   useEffect(() => {
     if (!vault) return;
     void refresh();
+    // AI 设置不随 watcherTick 抖动重拉（用户在 SettingsPage 改才会变）
+    api.getAiSettings().then(setAiSettings).catch(() => setAiSettings(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault?.id, watcherTick]);
 
@@ -233,6 +239,42 @@ export default function TodayPage() {
             ⚓ 昨日定下的今日寄语
           </Typography.Text>
           <div style={{ fontSize: 18, marginTop: 4 }}>{yesterdaySentence}</div>
+        </Card>
+      )}
+
+      {/* M4：AI 教练面板。
+          · 未启用 / 未配 key → 显降级态卡（引导去设置）
+          · 已启用且配 key → 显三卡（heuristic 结果也显，标「本地推断」） */}
+      {aiSettings && aiSettings.enabled && aiSettings.api_key ? (
+        <Row>
+          <Col span={24}>
+            <Card title={<Space><SettingOutlined /><span>AI 教练</span></Space>} loading={loading}>
+              <AiCoachCard vaultId={vault.id} />
+            </Card>
+          </Col>
+        </Row>
+      ) : (
+        <Card>
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+              <span>
+                未配置 AI —— 仅显示本地启发式信号。
+                <br />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  配置 Claude / OpenAI API Key 后启用主线判定、每日教练、明日一句。
+                </Text>
+              </span>
+            }
+          >
+            <Button
+              type="primary"
+              icon={<SettingOutlined />}
+              onClick={() => useTabsStore.getState().openView("settings", "设置")}
+            >
+              去设置
+            </Button>
+          </Empty>
         </Card>
       )}
 

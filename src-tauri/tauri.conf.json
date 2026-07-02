@@ -49,6 +49,7 @@
     "updater": {
       "pubkey": "TODO_REPLACE_AT_RELEASE",
       "endpoints": ["https://TODO_REPLACE_AT_RELEASE/latest"]
-    }
+    },
+    "notification": null
   }
 }

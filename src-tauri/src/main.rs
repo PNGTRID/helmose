@@ -22,6 +22,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             utils::logging::init();
 
@@ -85,12 +86,22 @@ pub fn run() {
             commands::library::get_graph_data,
             // 任务
             commands::tasks::get_tasks,
+            // M2：到期提醒（ensure 扫 due 任务生成 + fire 到期发桌面通知）
+            commands::reminders::ensure_reminders,
+            commands::reminders::fire_due_reminders,
             // 项目
             commands::projects::get_projects,
             // M5：项目进度聚合（运行时聚合，不入 frontmatter）
             commands::projects::get_project_progress,
             // 事件（日历用）
             commands::events::list_events,
+            // M1：OKR 查询（strategy/project 文档的 KR section 提取）
+            commands::okrs::list_okrs,
+            // M1：移动/重命名笔记（索引层同步 + 路径型引用检测）
+            commands::note_move::move_note,
+            commands::note_move::rename_note,
+            // M1：路径型引用授权更新（move 后用户授权改其他笔记原文）
+            commands::note_move::apply_ref_updates,
             // 脚手架（新建知识库骨架）
             commands::scaffold::scaffold_vault,
             // 全库搜索（FTS5）
@@ -103,6 +114,15 @@ pub fn run() {
             commands::index::should_reindex,
             // 自动更新检查（占位 endpoint，发布时配真实值）
             commands::update::check_update,
+            // M4：AI 设置（provider/key/enabled，存 app_data_dir/config.json，不入 vault）
+            commands::settings::get_ai_settings,
+            commands::settings::set_ai_settings,
+            // M4：AI 教练（主线判定 + 每日建议 + 明日一句；未配 key 自动降级本地启发式）
+            commands::ai::ai_mainline,
+            commands::ai::ai_coach,
+            commands::ai::ai_tomorrow,
+            // M4：明日一句编辑保存（前端 saveTomorrowEdit 复用同一收口逻辑）
+            commands::ai::update_tomorrow_sentence,
         ])
         .run(tauri::generate_context!())
         .expect("error while running helmose");

@@ -102,6 +102,23 @@ impl Database {
                 .execute("ALTER TABLE projects ADD COLUMN owner TEXT", &[])
                 .map_err(|e| format!("migrate projects.owner failed: {:?}", e))?;
         }
+
+        // M2：tasks 加 repeat_rule / parent_task_id 两列（重复任务 + 子任务嵌套）。
+        // 新库 SCHEMA 自带两列（下方 CREATE TABLE），此处只给老库 ALTER；幂等：列已存在则跳过。
+        let task_cols2: Vec<String> = self
+            .sqlite()
+            .query_map("PRAGMA table_info(tasks)", &[], |r| r.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        if !task_cols2.iter().any(|c| c == "repeat_rule") {
+            self.sqlite()
+                .execute("ALTER TABLE tasks ADD COLUMN repeat_rule TEXT", &[])
+                .map_err(|e| format!("migrate tasks.repeat_rule failed: {:?}", e))?;
+        }
+        if !task_cols2.iter().any(|c| c == "parent_task_id") {
+            self.sqlite()
+                .execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT", &[])
+                .map_err(|e| format!("migrate tasks.parent_task_id failed: {:?}", e))?;
+        }
         Ok(())
     }
 }
@@ -156,7 +173,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- M3：状态/优先级/紧急度（新库自带；旧库由 migrate() ALTER 补）
   status TEXT NOT NULL DEFAULT 'todo',
   priority INTEGER NOT NULL DEFAULT 0,
-  urgency TEXT NOT NULL DEFAULT 'low'
+  urgency TEXT NOT NULL DEFAULT 'low',
+  -- M2：重复规则（如 "day"/"week"/"month"/"Mon"-"Sun"）+ 父任务 id（子任务缩进指向）
+  repeat_rule TEXT,
+  parent_task_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks(done);
@@ -250,5 +270,33 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
   title, raw_content, tags,
   content='notes', content_rowid='rowid',
   tokenize='trigram'
+);
+
+-- M2：到期提醒（应用运行时轮询 + 桌面通知）。
+-- 冗余 task_text/due_date：发通知时免 join；fired=0/1 控制只发一次。
+CREATE TABLE IF NOT EXISTS reminders (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  note_id TEXT NOT NULL,
+  vault_id TEXT NOT NULL,
+  remind_at TEXT NOT NULL,
+  fired INTEGER NOT NULL DEFAULT 0,
+  task_text TEXT NOT NULL,
+  due_date TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_at ON reminders(remind_at);
+
+-- M4：AI 生成结果缓存（省 token + 防重复调用）。
+-- UNIQUE(vault_id, date_iso, feature)：同日同 feature 重复生成 → upsert 覆盖。
+-- feature ∈ {"mainline", "coach", "tomorrow"}。
+CREATE TABLE IF NOT EXISTS ai_generations (
+  id TEXT PRIMARY KEY,
+  vault_id TEXT NOT NULL,
+  date_iso TEXT NOT NULL,
+  feature TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(vault_id, date_iso, feature)
 );
 "#;

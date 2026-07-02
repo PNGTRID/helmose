@@ -13,6 +13,7 @@ use crate::services::Database;
 use crate::utils::dates;
 use crate::utils::exclude::is_excluded_rel;
 use rusqlite::params;
+use std::collections::HashMap;
 use std::path::Path;
 
 fn rel_of(abs: &Path, root: &Path) -> Option<String> {
@@ -185,7 +186,8 @@ pub fn upsert_rel(
                  SELECT rowid, title, raw_content, tags FROM notes WHERE id = ?1",
                 params![id],
             )?;
-            // 4. 重建该 note 的 tasks
+            // 4. 重建该 note 的 tasks（含 repeat_rule / parent_task_id）
+            let mut line_to_task_id: HashMap<i32, String> = HashMap::new();
             for t in &p.tasks {
                 // completed_at：status='done' 优先复用旧值（跨重索引保留首完时间），无旧值才记 now。
                 let completed_at: Option<String> = if t.status == "done" {
@@ -196,12 +198,17 @@ pub fn upsert_rel(
                 } else {
                     None
                 };
+                // parent_task_id 翻译：parent_source_line → 同笔记内父 task id（无则 NULL）
+                let parent_task_id: Option<String> = t
+                    .parent_source_line
+                    .and_then(|pl| line_to_task_id.get(&pl).cloned());
+                let tid = uuid::Uuid::new_v4().to_string();
                 tx.execute(
                     "INSERT INTO tasks \
-                     (id,note_id,vault_id,text,done,due_date,source,source_line,created_at,completed_at,status,priority,urgency) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                     (id,note_id,vault_id,text,done,due_date,source,source_line,created_at,completed_at,status,priority,urgency,repeat_rule,parent_task_id) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
                     params![
-                        uuid::Uuid::new_v4().to_string(),
+                        tid,
                         id,
                         vault_id,
                         t.text,
@@ -213,9 +220,14 @@ pub fn upsert_rel(
                         completed_at,
                         t.status,
                         t.priority,
-                        t.urgency
+                        t.urgency,
+                        t.repeat_rule,
+                        parent_task_id
                     ],
                 )?;
+                if let Some(sl) = t.source_line {
+                    line_to_task_id.insert(sl, tid);
+                }
             }
             // 5. 重建该 note 的 links（target 按 <stem>.md 近似解析）
             for l in &p.wikilinks {
@@ -270,12 +282,22 @@ pub fn upsert_rel(
                     ],
                 )?;
             }
-            // 7. 重建该 note 的 events 行
+            // 7. 重建该 note 的 events 行（M1：bullet 内 #project:名 行级优先匹配 projects 表填 pid）
             tx.execute(
                 "DELETE FROM events WHERE vault_id = ?1 AND note_id = ?2",
                 params![vault_id, id],
             )?;
             for ev in &p.events {
+                // 行级 pid：bullet 内 `#project:名` 标记 → 查 projects 表按名匹配（与全量第四遍同口径）。
+                // 匹配不到留 NULL，由步骤9 frontmatter.project 兜底回填。
+                let pid: Option<String> = ev.project_name.as_deref().and_then(|n| {
+                    tx.query_row(
+                        "SELECT id FROM projects WHERE vault_id = ?1 AND name = ?2 LIMIT 1",
+                        params![vault_id, n],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .ok()
+                });
                 tx.execute(
                     "INSERT INTO events \
                      (id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet,source_line) \
@@ -289,9 +311,36 @@ pub fn upsert_rel(
                         ev.event_date,
                         ev.content,
                         ev.output,
-                        None::<String>,
+                        pid,
                         ev.raw_bullet,
                         ev.source_line,
+                    ],
+                )?;
+            }
+            // 7.5 重建该 note 的 okrs 行（strategy/project 文档的 KR section 提取）。
+            // 修复：原增量只重建 tasks/events/tomorrow_sentences，漏 okrs → 编辑战略文档后
+            // okrs 表陈旧（list_okrs 返回旧 KR）。与全量第五遍同口径：纯解析在 indexer/okrs.rs。
+            tx.execute(
+                "DELETE FROM okrs WHERE vault_id = ?1 AND source_note_id = ?2",
+                params![vault_id, id],
+            )?;
+            for o in indexer::okrs::extract(&p) {
+                let raw_row = o.kr_text.clone();
+                tx.execute(
+                    "INSERT INTO okrs \
+                     (id,vault_id,source_note_id,quarter,objective,priority,kr_text,target_value,current_value,raw_row) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                    params![
+                        uuid::Uuid::new_v4().to_string(),
+                        vault_id,
+                        id,
+                        o.quarter,
+                        o.objective,
+                        o.priority,
+                        o.kr_text,
+                        o.target_value,
+                        o.current_value,
+                        raw_row,
                     ],
                 )?;
             }
@@ -309,6 +358,8 @@ pub fn upsert_rel(
             }
             // 9. 回填 tasks + events 的 project_id：本笔记 frontmatter.project（项目名）匹配已入库 projects。
             //    增量场景按名查 projects 表（项目可能在别的笔记，已入库；与 wikilink 增量近似同口径）。
+            //    M1：events 在步骤7已尝试 bullet 内 #project:名 行级匹配，此处加 `AND project_id IS NULL`
+            //    守卫避免覆盖行级标记（与全量第六遍回填同口径）。
             if let Some(proj_name) = p.frontmatter.get("project").and_then(|v| v.as_str()) {
                 let pid: Option<String> = tx
                     .query_row(
@@ -323,7 +374,7 @@ pub fn upsert_rel(
                         params![pid, id, vault_id],
                     )?;
                     tx.execute(
-                        "UPDATE events SET project_id = ?1 WHERE note_id = ?2 AND vault_id = ?3",
+                        "UPDATE events SET project_id = ?1 WHERE note_id = ?2 AND vault_id = ?3 AND project_id IS NULL",
                         params![pid, id, vault_id],
                     )?;
                 }
@@ -446,5 +497,147 @@ mod tests {
             .unwrap()
             .unwrap_or(0);
         assert_eq!(after, 0, "remove 后 FTS 应无命中");
+    }
+
+    /// 修复 1：增量重索引后 events 行级 project_id 不丢（与全量同口径）。
+    /// bullet 内 `#project:P1` → 全量索引建立 pid；后触发增量（重索引该笔记）→
+    /// project_id 应保持非空（增量 INSERT 时按 ev.project_name 查 projects 表回填），
+    /// 不被重置 NULL。
+    #[test]
+    fn upsert_preserves_event_project_id_on_reindex() {
+        use crate::commands::index::index_vault_inner;
+        let (_tmp, vault_dir, db) = setup();
+        // 拿 vid（setup 已注册）
+        let vid: String = db
+            .sqlite()
+            .query_row("SELECT id FROM vaults", &[], |r| r.get::<_, String>(0))
+            .unwrap()
+            .unwrap();
+
+        // 项目笔记：定义项目
+        std::fs::write(
+            vault_dir.join("项目A.md"),
+            "---\ntitle: 项目A\ntype: project\ntags: [project-status:active]\n---\n# 项目A\n",
+        )
+        .unwrap();
+        // 经历笔记：关键事件 section 第一条 bullet 含 #project:项目A 行级标记
+        std::fs::create_dir_all(vault_dir.join("05_个人成长与认知资产/经历/2026-04")).unwrap();
+        let ev_path = vault_dir.join("05_个人成长与认知资产/经历/2026-04/2026-04-01.md");
+        std::fs::write(
+            &ev_path,
+            "---\ntitle: 2026-04-01\ntype: experience\ncreated: 2026-04-01\n---\n# 概述\n\n## 关键事件\n- 早会 #project:项目A\n",
+        )
+        .unwrap();
+
+        // 全量索引 → events 行应带 project_id（行级匹配）
+        index_vault_inner(&vid, &db).expect("全量索引应成功");
+        let pid_full: Option<String> = db
+            .sqlite()
+            .query_row(
+                "SELECT project_id FROM events WHERE vault_id = ?1 LIMIT 1",
+                params![vid],
+                |r: &rusqlite::Row| r.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+            .unwrap_or(None);
+        assert!(pid_full.is_some(), "全量后 event project_id 应非空（行级匹配）");
+
+        // 触发增量（重索引该笔记，文件内容不变）
+        let content = std::fs::read_to_string(&ev_path).unwrap();
+        let rel = "05_个人成长与认知资产/经历/2026-04/2026-04-01.md";
+        assert!(upsert_rel(&db, &vid, rel, &content, Some(&ev_path)).unwrap());
+
+        // 增量后 project_id 应仍非空（不被重置 NULL）
+        let pid_inc: Option<String> = db
+            .sqlite()
+            .query_row(
+                "SELECT project_id FROM events WHERE vault_id = ?1 LIMIT 1",
+                params![vid],
+                |r: &rusqlite::Row| r.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+            .unwrap_or(None);
+        assert!(
+            pid_inc.is_some(),
+            "增量重索引后 event project_id 不应丢，实际 {:?}",
+            pid_inc
+        );
+        // 与全量时同一个 project_id
+        assert_eq!(
+            pid_inc, pid_full,
+            "增量后 project_id 应与全量一致（保留行级匹配结果）"
+        );
+    }
+
+    /// 修复 #1：增量重索引后 okrs 表应同步刷新（原实现漏 okrs → 编辑战略文档后 list_okrs 返回旧 KR）。
+    /// 流程：全量建 okrs → 修改战略文档的 KR（增/改/删）→ 增量重索引 → okrs 表应反映新内容。
+    #[test]
+    fn upsert_refreshes_okrs_on_reindex() {
+        use crate::commands::index::index_vault_inner;
+        let (_tmp, vault_dir, db) = setup();
+        let vid: String = db
+            .sqlite()
+            .query_row("SELECT id FROM vaults", &[], |r| r.get::<_, String>(0))
+            .unwrap()
+            .unwrap();
+
+        let stg = vault_dir.join("战略.md");
+        std::fs::write(
+            &stg,
+            "---\ntitle: 战略\ntype: strategy\npriority: 90\nquarter: 2026Q3\n---\n# 战略\n\n## 关键结果\n- KR1 收入目标 1000 万，当前 600 万\n- KR2 用户目标 5000，当前 3500\n",
+        )
+        .unwrap();
+        index_vault_inner(&vid, &db).expect("全量索引应成功");
+        let cnt_full: i64 = db
+            .sqlite()
+            .query_row(
+                "SELECT COUNT(*) FROM okrs WHERE vault_id = ?1",
+                params![vid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(0);
+        assert_eq!(cnt_full, 2, "全量后应有 2 个 KR");
+
+        // 修改战略文档：删 KR2、改 KR1 的当前值、增 KR3
+        let rel = "战略.md";
+        let new_content = "---\ntitle: 战略\ntype: strategy\npriority: 90\nquarter: 2026Q3\n---\n# 战略\n\n## 关键结果\n- KR1 收入目标 1000 万，当前 800 万\n- KR3 新增目标 200，当前 50\n";
+        assert!(upsert_rel(&db, &vid, rel, new_content, Some(&stg)).unwrap());
+
+        // 增量后 okrs 应刷新：KR2 已删、KR1 当前值更新、KR3 新增 → 共 2 条，无 KR2，有 KR3
+        let cnt_inc: i64 = db
+            .sqlite()
+            .query_row(
+                "SELECT COUNT(*) FROM okrs WHERE vault_id = ?1",
+                params![vid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(0);
+        assert_eq!(cnt_inc, 2, "增量后应仍 2 条 KR（删 1 增 1）");
+
+        let all_krs: Vec<String> = db
+            .sqlite()
+            .query_map(
+                "SELECT kr_text FROM okrs WHERE vault_id = ?1",
+                params![vid],
+                |r| r.get::<_, Option<String>>(0).map(|o| o.unwrap_or_default()),
+            )
+            .unwrap();
+        assert!(
+            !all_krs.iter().any(|t| t.contains("KR2")),
+            "KR2 应已被删除，实际 {:?}",
+            all_krs
+        );
+        assert!(
+            all_krs.iter().any(|t| t.contains("KR3")),
+            "KR3 应已新增，实际 {:?}",
+            all_krs
+        );
+        assert!(
+            all_krs.iter().any(|t| t.contains("800 万")),
+            "KR1 当前值应更新为 800 万，实际 {:?}",
+            all_krs
+        );
     }
 }

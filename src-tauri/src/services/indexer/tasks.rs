@@ -26,6 +26,12 @@ pub struct ExtractedTask {
     pub priority: i32,
     /// M3：紧急度（"low" | "mid" | "high"；🔥 = high）
     pub urgency: String,
+    /// M2：重复规则（"day"/"week"/"month"/"Mon"-"Sun"）。None=非重复。
+    pub repeat_rule: Option<String>,
+    /// M2：相对本笔记的父任务 source_line（缩进子任务指向最近非缩进父）。
+    /// 写库时由 commands 层翻译为父任务的 id（同样按 note_id+source_line 反查）。
+    /// None=顶层任务（无父）。
+    pub parent_source_line: Option<i32>,
 }
 
 /// 通道 A：checkbox 前缀捕获组（含 `/` 表示进行中：`- [/] 任务`）。
@@ -67,6 +73,47 @@ fn split_due(text: &str) -> (String, Option<String>) {
     (text.to_string(), None)
 }
 
+// ============================================================
+// M2：toggle_task 重复推进用辅助（library.rs 调用，公开）
+// ============================================================
+
+/// 从一行 bullet 提取当前 due_date（NaiveDate）。
+/// 识别 📅 / due: / 截止: / deadline 标记；无 → None。
+/// 与 split_due 同口径，但不清理 text（toggle 推进只需读当前值）。
+pub fn extract_due_from_line(line: &str) -> Option<chrono::NaiveDate> {
+    for re in [&*RE_DUE_EMOJI, &*RE_DUE_TEXT] {
+        if let Some(caps) = re.captures(line) {
+            if let Some(d) = crate::utils::dates::normalize_date(&caps[1]) {
+                return Some(d);
+            }
+        }
+    }
+    None
+}
+
+/// 把新 due_date 写回 bullet 行：已有 📅 / due: / 截止: / deadline 标记 → 替换；
+/// 都无 → 行尾追加 ` 📅 YYYY-MM-DD`。
+/// 用于 toggle_task 重复推进写回 bullet。
+pub fn replace_or_append_due(line: &str, new_iso: &str) -> String {
+    // 优先级：先 emoji 再文本（与 split_due 顺序一致）
+    if RE_DUE_EMOJI.is_match(line) {
+        return RE_DUE_EMOJI
+            .replace_all(line, format!(" 📅 {}", new_iso))
+            .trim_end()
+            .to_string();
+    }
+    if RE_DUE_TEXT.is_match(line) {
+        // 文本标记保留语义：due: 新日期
+        let repl = format!(" due: {}", new_iso);
+        return RE_DUE_TEXT
+            .replace_all(line, repl.as_str())
+            .trim_end()
+            .to_string();
+    }
+    // 都没有 → 追加 📅
+    format!("{} 📅 {}", line.trim_end(), new_iso)
+}
+
 /// 从 bullet 文本拆出 priority（⭐ 数 1-3）并清理标记。
 /// 返回 (去掉 ⭐ 的干净 text, priority)。无 ⭐ → (原文, 0)。
 fn split_priority(text: &str) -> (String, i32) {
@@ -88,6 +135,51 @@ fn split_urgency(text: &str) -> (String, String) {
     (text.to_string(), "low".to_string())
 }
 
+// M2：重复规则标记：🔁 every xxx（xxx = day/week/month 或 Mon/Tue/.../Sun，大小写不敏感）
+// 语法不匹配（如 `🔁 abc` 缺 every）→ None 当普通任务，不清 🔁（保持原文）。
+// 注：先匹配 every 形式；若只匹配到 🔁 但无 every 视为语法错，return None。
+static RE_REPEAT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\s*🔁\s*every\s+([A-Za-z]+)").unwrap());
+
+/// 从 bullet 文本拆出 repeat_rule（🔁 every xxx）并清理标记。
+/// 仅接受 day/week/month/英文星期（Mon/Tue/Wed/Thu/Fri/Sat/Sun，全称也收）。
+/// 语法错（`🔁 abc` 无 every / 词不在白名单）→ None 当普通任务。
+/// 返回 (去掉 🔁 标记的干净 text, repeat_rule)。
+fn split_repeat(text: &str) -> (String, Option<String>) {
+    if let Some(caps) = RE_REPEAT.captures(text) {
+        let raw = caps[1].to_lowercase();
+        let rule = normalize_repeat_rule(&raw);
+        if rule.is_some() {
+            let cleaned = RE_REPEAT.replace_all(text, "").trim().to_string();
+            return (cleaned, rule);
+        }
+    }
+    (text.to_string(), None)
+}
+
+/// 把用户写的重复词归一化为标准规则。未知词 → None（当普通任务）。
+/// day/daily → "day"；week/weekly → "week"；month/monthly → "month"；
+/// Mon/Monday → "Mon"（保留星期三字母缩写，与 add_period 同口径）。
+fn normalize_repeat_rule(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    match s.to_lowercase().as_str() {
+        "day" | "daily" | "d" => Some("day".into()),
+        "week" | "weekly" | "w" => Some("week".into()),
+        "month" | "monthly" | "m" => Some("month".into()),
+        "mon" | "monday" => Some("Mon".into()),
+        "tue" | "tuesday" => Some("Tue".into()),
+        "wed" | "wednesday" => Some("Wed".into()),
+        "thu" | "thursday" => Some("Thu".into()),
+        "fri" | "friday" => Some("Fri".into()),
+        "sat" | "saturday" => Some("Sat".into()),
+        "sun" | "sunday" => Some("Sun".into()),
+        _ => None,
+    }
+}
+
 /// 从 bullet 文本拆出 status 的 🔄 标记（doing）并清理。
 /// 返回 (去掉 🔄 的干净 text, is_doing_emoji)。
 /// 注：checkbox 前缀 `[x]/[/]` 的状态在 extract 阶段判定，本函数只清 bullet 内的 🔄。
@@ -99,16 +191,19 @@ fn split_doing_emoji(text: &str) -> (String, bool) {
     (text.to_string(), false)
 }
 
-/// 对 bullet 文本依次剥离所有标记 emoji（due_date / priority / urgency / 🔄），
+/// 对 bullet 文本依次剥离所有标记 emoji（due_date / priority / urgency / 🔄 / 🔁），
 /// 返回最终干净 text 与所有独立字段。统一所有提取通道的清理链路。
-fn split_all_marks(text: &str) -> (String, Option<String>, i32, String, bool) {
+fn split_all_marks(
+    text: &str,
+) -> (String, Option<String>, i32, String, bool, Option<String>) {
     // 顺序无关紧要（每个 split 只匹配并清理自己的 emoji，互相不影响）；
     // 但要保证最终 text 不残留任何已知 emoji，故逐道处理。
     let (t, due) = split_due(text);
     let (t, pri) = split_priority(&t);
     let (t, urg) = split_urgency(&t);
     let (t, doing_emoji) = split_doing_emoji(&t);
-    (t, due, pri, urg, doing_emoji)
+    let (t, repeat) = split_repeat(&t);
+    (t, due, pri, urg, doing_emoji, repeat)
 }
 
 const TODO_SECTION_KEYWORDS: &[&str] = &[
@@ -125,8 +220,27 @@ const TODO_SECTION_KEYWORDS: &[&str] = &[
     "TODO",
 ];
 
+/// 计算行首缩进的「等价空格数」（tab 按 4 空格折算，与 CommonMark 显示宽度近似）。
+/// 用于 checkbox 通道 A 的子任务缩进层级判定。
+fn indent_width(line: &str) -> usize {
+    let mut n = 0usize;
+    for c in line.chars() {
+        match c {
+            ' ' => n += 1,
+            '\t' => n += 4,
+            _ => break,
+        }
+    }
+    n
+}
+
 /// 通道 A：全文 checkbox
+/// M2：缩进层级追踪——缩进 >0 的 checkbox 视为子任务，parent_source_line 指向最近的
+/// 非缩进（顶层）checkbox 任务的 source_line。栈式：每个非缩进任务成为后续缩进任务的父，
+/// 直到出现下一个非缩进任务（替换栈顶）。
 pub fn extract_checkbox(content: &str) -> Vec<ExtractedTask> {
+    // 栈顶：最近一个非缩进（顶层）checkbox 任务的 source_line（1-based）。
+    let mut top_parent_line: Option<i32> = None;
     content
         .lines()
         .enumerate()
@@ -139,16 +253,27 @@ pub fn extract_checkbox(content: &str) -> Vec<ExtractedTask> {
                 _ => ("todo".to_string(), false),
             };
             // 拆标记 emoji（🔄 不影响 checkbox 类的 status——前缀优先）
-            let (text, due, pri, urg, _doing_emoji) = split_all_marks(caps[2].trim());
+            let (text, due, pri, urg, _doing_emoji, repeat) = split_all_marks(caps[2].trim());
+            let line_no = i as i32 + 1;
+            let indent = indent_width(line);
+            // 缩进 >0 且栈顶有父 → 子任务；否则为顶层任务（刷新栈顶）
+            let parent_source_line = if indent > 0 {
+                top_parent_line
+            } else {
+                top_parent_line = Some(line_no);
+                None
+            };
             Some(ExtractedTask {
                 text,
                 done,
                 status,
                 source: "checkbox".to_string(),
-                source_line: Some(i as i32 + 1),
+                source_line: Some(line_no),
                 due_date: due,
                 priority: pri,
                 urgency: urg,
+                repeat_rule: repeat,
+                parent_source_line,
             })
         })
         .collect()
@@ -168,7 +293,7 @@ pub fn extract_bullets(body: &str, source: &str) -> Vec<ExtractedTask> {
                 return None;
             }
             // section 类无 checkbox → status 默认 todo；bullet 内 🔄 → doing
-            let (text, due, pri, urg, doing_emoji) = split_all_marks(raw);
+            let (text, due, pri, urg, doing_emoji, repeat) = split_all_marks(raw);
             let status = if doing_emoji { "doing" } else { "todo" };
             Some(ExtractedTask {
                 text,
@@ -179,6 +304,9 @@ pub fn extract_bullets(body: &str, source: &str) -> Vec<ExtractedTask> {
                 due_date: due,
                 priority: pri,
                 urgency: urg,
+                repeat_rule: repeat,
+                // section 通道 B 不追踪缩进（多为平铺列表，子任务语义弱）
+                parent_source_line: None,
             })
         })
         .collect()
@@ -356,5 +484,94 @@ mod tests {
         assert_eq!(v[0].priority, 2, "⭐⭐ 无空格边界 → priority 2");
         assert_eq!(v[0].urgency, "high", "🔥 无空格边界 → urgency high");
         assert_eq!(v[0].text, "任务", "emoji 应剥离干净");
+    }
+
+    // ============ M2 新增：split_repeat / 子任务缩进 ============
+
+    #[test]
+    fn repeat_rule_解析并清理text() {
+        // `- [ ] 周报 🔁 every week` → repeat_rule=Some("week"), text="周报"
+        let v = extract_checkbox("- [ ] 周报 🔁 every week");
+        assert_eq!(v.len(), 1);
+        assert_eq!(
+            v[0].repeat_rule.as_deref(),
+            Some("week"),
+            "🔁 every week → repeat_rule=week"
+        );
+        assert_eq!(v[0].text, "周报", "🔁 标记应从 text 清理");
+    }
+
+    #[test]
+    fn repeat_rule_多种词归一化() {
+        // daily/weekly/monthly 与缩写都归一化；星期全称 → 三字母
+        assert_eq!(split_repeat("任务 🔁 every daily").1.as_deref(), Some("day"));
+        assert_eq!(split_repeat("任务 🔁 every weekly").1.as_deref(), Some("week"));
+        assert_eq!(
+            split_repeat("任务 🔁 every monthly").1.as_deref(),
+            Some("month")
+        );
+        assert_eq!(
+            split_repeat("任务 🔁 every Monday").1.as_deref(),
+            Some("Mon")
+        );
+        assert_eq!(
+            split_repeat("任务 🔁 every fri").1.as_deref(),
+            Some("Fri")
+        );
+    }
+
+    #[test]
+    fn repeat_rule_语法错_当普通任务() {
+        // `🔁 abc`（缺 every）→ None，当普通任务（不清 🔁 也无所谓，提取不影响其它字段）
+        let v = extract_checkbox("- [ ] 任务 🔁 abc");
+        assert_eq!(v.len(), 1);
+        assert!(v[0].repeat_rule.is_none(), "语法错应返回 None");
+        // `🔁 every xyz`（词不在白名单）→ None
+        let (text, rule) = split_repeat("任务 🔁 every xyz");
+        assert!(rule.is_none(), "未知词应返回 None");
+        // 语法错时 text 不变（保持原文，不强制清理未识别的 🔁）
+        assert!(!text.is_empty());
+    }
+
+    #[test]
+    fn repeat_rule_无标记_none() {
+        let v = extract_checkbox("- [ ] 普通任务");
+        assert_eq!(v.len(), 1);
+        assert!(v[0].repeat_rule.is_none());
+    }
+
+    #[test]
+    fn 子任务缩进_parent指向最近非缩进父() {
+        // 顶层任务 + 缩进子任务（2 空格缩进）→ 子 parent_source_line 指向父的 1-based 行号
+        let content = "- [ ] 父任务\n  - [ ] 子任务A\n  - [ ] 子任务B\n- [ ] 另一个父\n  - [ ] 子C";
+        let v = extract_checkbox(content);
+        assert_eq!(v.len(), 5);
+        // 父1（line 1）无父
+        assert_eq!(v[0].source_line, Some(1));
+        assert!(v[0].parent_source_line.is_none(), "顶层任务无父");
+        // 子A（line 2）父=父1（line 1）
+        assert_eq!(v[1].source_line, Some(2));
+        assert_eq!(v[1].parent_source_line, Some(1), "子A 父=父1");
+        // 子B（line 3）父=父1（line 1）
+        assert_eq!(v[2].source_line, Some(3));
+        assert_eq!(v[2].parent_source_line, Some(1), "子B 父=父1");
+        // 父2（line 4）无父
+        assert_eq!(v[3].source_line, Some(4));
+        assert!(v[3].parent_source_line.is_none());
+        // 子C（line 5）父=父2（line 4）
+        assert_eq!(v[4].source_line, Some(5));
+        assert_eq!(v[4].parent_source_line, Some(4), "子C 父=父2");
+    }
+
+    #[test]
+    fn 子任务多层缩进_取最近非缩进() {
+        // 多层缩进：父(0) → 子(2) → 孙(4)；本实现按「最近非缩进」语义，
+        // 子指向父，孙也指向父（不追踪中间层，简化语义：缩进 >0 都归最近顶层）
+        let content = "- [ ] 父\n  - [ ] 子\n    - [ ] 孙";
+        let v = extract_checkbox(content);
+        assert_eq!(v.len(), 3);
+        assert!(v[0].parent_source_line.is_none());
+        assert_eq!(v[1].parent_source_line, Some(1), "子 → 父");
+        assert_eq!(v[2].parent_source_line, Some(1), "孙 → 最近顶层（父）");
     }
 }

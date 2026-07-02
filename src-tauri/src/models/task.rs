@@ -22,4 +22,8 @@ pub struct Task {
     /// M3：紧急度（"low" | "mid" | "high"，来自 vault 🔥 标记）。
     /// 注：派生（按 due_date 推导）只在前端做，indexer 只解析手动 🔥。
     pub urgency: String,
+    /// M2：重复规则（"day"/"week"/"month"/"Mon"-"Sun"）。None=非重复。
+    pub repeat_rule: Option<String>,
+    /// M2：父任务 id（缩进子任务指向最近非缩进父）。None=顶层任务。
+    pub parent_task_id: Option<String>,
 }

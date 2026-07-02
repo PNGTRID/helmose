@@ -1,0 +1,138 @@
+/* TimelineView 样式：横向时间轴 + 未排期侧栏 */
+
+.tl-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tl-header {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.tl-body {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+/* —— 横向时间轴 —— */
+.tl-track {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tl-axis-label {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.tl-cells {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 4px 2px;
+  /* 滚动条美化 */
+  scrollbar-width: thin;
+}
+
+.tl-cell {
+  flex: 0 0 130px;
+  min-height: 180px;
+  border: 1px solid var(--ob-border, #e5e7eb);
+  border-radius: 6px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--ob-bg, #fff);
+  transition: border-color 0.15s;
+}
+
+.tl-cell.has {
+  background: rgba(124, 58, 237, 0.04);
+}
+
+.tl-cell.today {
+  border-color: #10b981;
+  border-width: 2px;
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.tl-cell.overdue {
+  border-color: #ef4444;
+}
+
+.tl-cell-date {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+  border-bottom: 1px solid var(--ob-border, #e5e7eb);
+  padding-bottom: 2px;
+}
+
+.tl-cell-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-height: 0;
+  /* 任务卡片堆叠区可滚 */
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* —— 未排期侧栏 —— */
+.tl-undated {
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--ob-border, #e5e7eb);
+  border-radius: 6px;
+  padding: 6px;
+  max-height: 360px;
+  background: var(--ob-bg, #fff);
+}
+
+.tl-undated-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--ob-border, #e5e7eb);
+}
+
+.tl-undated-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-y: auto;
+  flex: 1;
+  scrollbar-width: thin;
+}
+
+/* 暗色模式适配（沿用 html.dark 变量约定） */
+html.dark .tl-cell {
+  border-color: var(--ob-border, #374151);
+  background: var(--ob-bg, #1f2937);
+}
+
+html.dark .tl-cell.has {
+  background: rgba(124, 58, 237, 0.08);
+}
+
+html.dark .tl-cell.today {
+  background: rgba(16, 185, 129, 0.12);
+}
+
+html.dark .tl-undated {
+  border-color: var(--ob-border, #374151);
+  background: var(--ob-bg, #1f2937);
+}

@@ -16,6 +16,7 @@ import TaskForm from "../components/TaskForm";
 import ListView from "../components/tasks/ListView";
 import KanbanView from "../components/tasks/KanbanView";
 import MatrixView from "../components/tasks/MatrixView";
+import TimelineView from "../components/tasks/TimelineView";
 import type { NoteContent, NoteMeta, Task } from "../types";
 import { computeUrgencyMap } from "../utils/taskGrouping";
 
@@ -25,6 +26,7 @@ const VIEW_OPTIONS = [
   { label: "📋 列表", value: "list" as const },
   { label: "🗂 看板", value: "kanban" as const },
   { label: "🎯 四象限", value: "matrix" as const },
+  { label: "📅 时间线", value: "timeline" as const },
 ];
 
 export default function TasksPage() {
@@ -38,6 +40,9 @@ export default function TasksPage() {
 
   const [tab, setTab] = useState<"open" | "done">("open");
   const [tasks, setTasks] = useState<Task[]>([]);
+  // M2：已完成子任务列表（tab=open 时拉一次，仅用于 ListView 判定父任务的子任务是否全完成）。
+  // tab=done 时不需要（已是已完成列表本身），置空。
+  const [doneChildrenHint, setDoneChildrenHint] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
   // refresh 请求序号守卫：避免 onToggle/onTaskWritten 的 await refresh 与 effect 的 refresh 竞态脏写
   const refreshSeq = useRef(0);
@@ -73,9 +78,25 @@ export default function TasksPage() {
       const data = await api.getTasks(vault.id, done, done ? TASK_LIMIT_DONE : TASK_LIMIT_OPEN);
       if (refreshSeq.current !== mySeq) return; // 已被更新请求覆盖，丢弃
       setTasks(data);
+      // tab=open 时额外拉已完成任务，供 ListView 判定父任务的子任务是否全完成。
+      // 子任务完成会从 open 列表移除（done=true），但父任务还在 open → 需 done 数据交叉验证。
+      if (!done) {
+        try {
+          const doneData = await api.getTasks(vault.id, true, TASK_LIMIT_DONE);
+          if (refreshSeq.current !== mySeq) return;
+          // 只保留有父任务的已完成子任务（其他已完成任务对子任务判定无意义，过滤减负）
+          setDoneChildrenHint(doneData.filter((t) => t.parent_task_id != null));
+        } catch {
+          if (refreshSeq.current !== mySeq) return;
+          setDoneChildrenHint([]);
+        }
+      } else {
+        setDoneChildrenHint([]);
+      }
     } catch {
       if (refreshSeq.current !== mySeq) return;
       setTasks([]);
+      setDoneChildrenHint([]);
     } finally {
       if (refreshSeq.current === mySeq) setLoading(false);
     }
@@ -181,6 +202,7 @@ export default function TasksPage() {
               noteById={noteById}
               onOpen={(t) => setOpenTaskId(t.id)}
               onToggle={onToggle}
+              doneChildrenHint={doneChildrenHint}
             />
           )}
           {view === "kanban" && (
@@ -201,6 +223,15 @@ export default function TasksPage() {
               onOpen={(t) => setOpenTaskId(t.id)}
               onToggle={onToggle}
               onTaskWritten={onTaskWritten}
+            />
+          )}
+          {view === "timeline" && (
+            <TimelineView
+              tasks={tasks}
+              urgencyMap={urgencyMap}
+              noteById={noteById}
+              onOpen={(t) => setOpenTaskId(t.id)}
+              onToggle={onToggle}
             />
           )}
         </DataState>

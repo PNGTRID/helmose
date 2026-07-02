@@ -2,7 +2,7 @@
 // 大纲/反链仅 active note tab 时填充；标签全库始终显示，可折叠。宽度由 App 传入（可拖拽）。
 import "./SidePanel.css";
 import { useEffect, useRef, useState } from "react";
-import { Spin } from "antd";
+import { Spin, Tag } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
@@ -160,19 +160,42 @@ export default function SidePanel({ width }: { width: number }) {
                   本文未链接到其他笔记
                 </div>
               ) : (
-                forwardLinks.map((b, i) => (
-                  <div
-                    key={i}
-                    className="ob-side-link"
-                    onClick={() => openNoteFromMeta(b.source)}
-                  >
-                    {b.source.title ?? b.source.file_name}
-                    <div className="ob-side-sub">{b.source.rel_path}</div>
-                    {b.target_text && (
-                      <div className="ob-side-sub" style={{ fontStyle: "italic" }}>↳ {b.target_text}</div>
-                    )}
-                  </div>
-                ))
+                forwardLinks.map((b, i) => {
+                  // dangling：target 解析不到笔记 → 灰色 + 「未解析」标签，点击不跳转
+                  const isDangling = !!b.is_dangling;
+                  return (
+                    <div
+                      key={i}
+                      className="ob-side-link"
+                      style={
+                        isDangling
+                          ? { cursor: "default", opacity: 0.55 }
+                          : undefined
+                      }
+                      onClick={() => {
+                        if (!isDangling) openNoteFromMeta(b.source);
+                      }}
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <span>{b.source.title ?? b.source.file_name}</span>
+                        {isDangling && (
+                          <Tag
+                            color="default"
+                            style={{ fontSize: 10, margin: 0, lineHeight: "16px", padding: "0 4px" }}
+                          >
+                            未解析
+                          </Tag>
+                        )}
+                      </span>
+                      <div className="ob-side-sub">
+                        {isDangling ? `[[${b.target_text}]]` : b.source.rel_path}
+                      </div>
+                      {!isDangling && b.target_text && (
+                        <div className="ob-side-sub" style={{ fontStyle: "italic" }}>↳ {b.target_text}</div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
           </>

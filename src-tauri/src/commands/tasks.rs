@@ -21,6 +21,8 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         status: row.get("status")?,
         priority: row.get("priority")?,
         urgency: row.get("urgency")?,
+        repeat_rule: row.get("repeat_rule")?,
+        parent_task_id: row.get("parent_task_id")?,
     })
 }
 
@@ -37,7 +39,7 @@ pub fn get_tasks(
     db: State<'_, Database>,
 ) -> Result<Vec<Task>, String> {
     let mut sql = String::from(
-        "SELECT id,note_id,vault_id,text,done,due_date,source,source_line,project_id,created_at,completed_at,status,priority,urgency \
+        "SELECT id,note_id,vault_id,text,done,due_date,source,source_line,project_id,created_at,completed_at,status,priority,urgency,repeat_rule,parent_task_id \
          FROM tasks WHERE vault_id = ?1",
     );
     let mut pv: Vec<&dyn rusqlite::ToSql> = vec![&vault_id];

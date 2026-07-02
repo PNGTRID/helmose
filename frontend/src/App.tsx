@@ -56,6 +56,48 @@ export default function App() {
     if (vault) api.startWatcher(vault.id).catch(() => {});
   }, [vault?.id]);
 
+  // M2：到期提醒——拆两个独立 interval，避免每分钟做候选扫描（绝大多数周期无可发提醒）。
+  //   - fireDueReminders：每 60s（走 idx_reminders_at 索引，便宜；查到期未发 → 桌面通知 + 标 fired）
+  //   - ensureReminders：每 300s（5 分钟；扫 due 任务生成 reminders，幂等无副作用，降低空跑频率）
+  // 注：应用未运行不发（本期不做后台守护，权限被拒静默跳过）。
+  useEffect(() => {
+    if (!vault) return;
+    let cancelled = false;
+    const fireTick = async () => {
+      if (cancelled) return;
+      try {
+        await api.fireDueReminders();
+      } catch (err) {
+        console.warn("[reminders] fire 轮询失败（静默跳过）", err);
+      }
+    };
+    const ensureTick = async () => {
+      if (cancelled) return;
+      try {
+        await api.ensureReminders(vault.id);
+      } catch (err) {
+        console.warn("[reminders] ensure 轮询失败（静默跳过）", err);
+      }
+    };
+    // 启动即触发一次（同步：先 ensure 生成候选，再 fire 发到期）
+    (async () => {
+      if (cancelled) return;
+      try {
+        await api.ensureReminders(vault.id);
+        await api.fireDueReminders();
+      } catch (err) {
+        console.warn("[reminders] 启动轮询失败（静默跳过）", err);
+      }
+    })();
+    const fireTimer = window.setInterval(fireTick, 60_000);
+    const ensureTimer = window.setInterval(ensureTick, 300_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(fireTimer);
+      window.clearInterval(ensureTimer);
+    };
+  }, [vault?.id]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;

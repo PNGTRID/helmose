@@ -26,6 +26,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Agent/IDE 工具本地状态
+.serena/
+
 # 日志
 *.log
 

@@ -2,6 +2,7 @@
 // 服务模块
 // ============================================================
 
+pub mod ai;
 pub mod contract;
 pub mod database;
 pub mod database_sqlite;

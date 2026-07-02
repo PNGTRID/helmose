@@ -51,7 +51,7 @@ pub fn export_life_state(
     // 聚合统计
     let total_notes = count(db.inner(), "SELECT COUNT(*) FROM notes WHERE vault_id = ?1", &vid)?;
     let pending =
-        count(db.inner(), "SELECT COUNT(*) FROM tasks WHERE vault_id = ?1 AND done = 0", &vid)?;
+        count(db.inner(), "SELECT COUNT(*) FROM tasks WHERE vault_id = ?1 AND status <> 'done'", &vid)?;
     let total_tasks = count(db.inner(), "SELECT COUNT(*) FROM tasks WHERE vault_id = ?1", &vid)?;
     let wikilinks = count(db.inner(), "SELECT COUNT(*) FROM links WHERE vault_id = ?1", &vid)?;
 
@@ -59,7 +59,7 @@ pub fn export_life_state(
     let top_tasks: Vec<Value> = db
         .sqlite()
         .query_map(
-            "SELECT text, due_date, source FROM tasks WHERE vault_id = ?1 AND done = 0 \
+            "SELECT text, due_date, source FROM tasks WHERE vault_id = ?1 AND status <> 'done' \
              ORDER BY due_date IS NULL, due_date ASC LIMIT 10",
             params![vid],
             |r| {

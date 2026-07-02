@@ -6,6 +6,7 @@
 pub mod events;
 pub mod frontmatter;
 pub mod incremental;
+pub mod okrs;
 pub mod projects;
 pub mod sections;
 pub mod tasks;

@@ -384,6 +384,13 @@ pub fn save_note_body(
 
 /// 切换任务完成态核心逻辑：改 source_line 行的 checkbox（[ ]↔[x]）→ 复用 save（备份+写+索引）。
 /// 用户在任务列表直接打勾，免开笔记编辑。铁律：用户动作触发 + save 带备份保护。
+///
+/// M2 重复推进语义：若任务 repeat_rule 非空 且 用户请求 done=true（打勾完成），
+/// 改语义为「推进 due_date 到下一周期 + 保持 unchecked（不打勾）」而非标 done。
+///   - 周期计算：day=+1d / week=+7d / month=+1月 / weekday=下一个该 weekday（utils::dates::add_period）。
+///   - 无 due_date 的重复任务 → 以今天为基准推进。
+///   - 推进后写回 bullet 的 📅 标记（已有则替换；无则追加）。
+///   - 取消勾选（done=false）不做特殊处理，按普通 toggle。
 pub fn toggle_task_inner(
     note_id: &str,
     source_line: i64,
@@ -393,6 +400,32 @@ pub fn toggle_task_inner(
     // 读盘完整文件 + 取正文（去 fm，source_line 与之同源）——避免写回丢失 frontmatter
     let full = read_full(note_id, db)?;
     let body = body_of(&full);
+
+    // M2：先查任务的 repeat_rule（只在 done=true 且任务为重复时走推进分支）。
+    // 注：source_line 是相对正文的 1-based 行号；DB 也按 (note_id, source_line) 反查。
+    // query_row 返回 Result<Option<T>>，T=Option<String>（列可空）→ 三层 Option 拍平为 Option<String>。
+    let repeat_rule: Option<String> = if done {
+        db.sqlite()
+            .query_row(
+                "SELECT repeat_rule FROM tasks WHERE note_id = ?1 AND source_line = ?2 LIMIT 1",
+                rusqlite::params![note_id, source_line as i32],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+            .flatten()
+    } else {
+        None
+    };
+
+    // 重复推进分支：推进 due_date + 保持 unchecked
+    // 审查 #12：改 if let 取代 repeat_rule.unwrap()（原逻辑虽安全，但 unwrap 风格脆弱）
+    if done {
+        if let Some(rule) = repeat_rule {
+            return advance_repeat_task(note_id, source_line, rule, &full, &body, db);
+        }
+    }
+
     // 按 1-based 行号改该行 checkbox（首个匹配）
     let mut lines: Vec<String> = body.lines().map(String::from).collect();
     let idx = (source_line - 1) as usize;
@@ -414,6 +447,51 @@ pub fn toggle_task_inner(
     }
     // 拼回 frontmatter + 复用 save（备份 + 写盘 + 增量索引 → tasks.done 同步）
     let new_full = reassemble(&full, &new_body);
+    save_note_content_inner(note_id, &new_full, db)
+}
+
+/// 重复任务推进：计算下一周期 due_date → 写回 bullet 的 📅 标记 → 保持 unchecked。
+/// 既有 📅 替换为新日期；无则追加 ` 📅 YYYY-MM-DD`。无 due_date 以今天为基准。
+/// 走 save_note_content_inner 收口（备份 + 写盘 + 重索引 → tasks.due_date 同步刷新）。
+fn advance_repeat_task(
+    note_id: &str,
+    source_line: i64,
+    rule: String,
+    full: &str,
+    body: &str,
+    db: &Database,
+) -> Result<NoteContent, String> {
+    use crate::utils::dates::{add_period, today_naive};
+
+    let mut lines: Vec<String> = body.lines().map(String::from).collect();
+    let idx = (source_line - 1) as usize;
+    if idx >= lines.len() {
+        return Err(format!(
+            "source_line {} 越界（正文共 {} 行）",
+            source_line,
+            lines.len()
+        ));
+    }
+    let cur_line = lines[idx].clone();
+
+    // 提取当前 due_date（如果有）：📅 YYYY-MM-DD 或 due:/截止:/deadline 文本标记。
+    // 复用 indexer 正则避免逻辑分叉；找不到 → 用今天为基准。
+    let cur_due: Option<chrono::NaiveDate> = crate::services::indexer::tasks::extract_due_from_line(&cur_line);
+
+    let base = cur_due.unwrap_or_else(today_naive);
+    let next = add_period(base, &rule).ok_or_else(|| format!("无效 repeat_rule: {}", rule))?;
+    let next_iso = next.format("%Y-%m-%d").to_string();
+
+    // 写回 bullet：替换已有 📅 日期；若无 📅 但有 due:/截止:/deadline 文本标记也替换；
+    // 都没有 → 行尾追加 ` 📅 YYYY-MM-DD`。
+    let new_line = crate::services::indexer::tasks::replace_or_append_due(&cur_line, &next_iso);
+
+    lines[idx] = new_line;
+    let mut new_body = lines.join("\n");
+    if body.ends_with('\n') {
+        new_body.push('\n');
+    }
+    let new_full = reassemble(full, &new_body);
     save_note_content_inner(note_id, &new_full, db)
 }
 
@@ -1332,7 +1410,8 @@ pub fn get_tomorrow_sentence(
     let s: Option<String> = db
         .sqlite()
         .query_row(
-            "SELECT sentence FROM tomorrow_sentences WHERE vault_id = ?1 AND date_iso = ?2 LIMIT 1",
+            "SELECT sentence FROM tomorrow_sentences WHERE vault_id = ?1 AND date_iso = ?2 \
+             ORDER BY rowid DESC LIMIT 1",
             params![vault_id, date_iso],
             |r| r.get::<_, String>(0),
         )
@@ -1371,6 +1450,8 @@ pub fn get_backlinks(
                     },
                     target_text: row.get("target_text")?,
                     alias: row.get("alias")?,
+                    // get_backlinks 走 INNER JOIN（target_note_id = note_id），target 必然已解析
+                    is_dangling: false,
                 })
             },
         )
@@ -1378,9 +1459,13 @@ pub fn get_backlinks(
     Ok(rows)
 }
 
-/// 前向链接：本文链接了哪些笔记（links.source_note_id = note_id → 目标 note）。
-/// 复用 Backlink DTO（source 字段 = 目标 note 的元数据）。只返回已解析（非 dangling）的；
-/// dangling（指向不存在的目标）提示留 backlog。
+/// 前向链接：本文链接了哪些笔记（links.source_note_id = note_id → 目标）。
+/// 复用 Backlink DTO（source 字段 = 目标 note 的元数据）。
+/// 含 dangling（[[不存在的笔记]]，target_note_id IS NULL）：
+///   - dangling 行：source 用占位 NoteMeta（id=空串、file_name=target_text），is_dangling=true
+///     前端按 is_dangling 渲染灰色「未解析」标签，点击不跳转。
+///   - 已解析行：source 为目标 note 元数据，is_dangling=false。
+/// ORDER BY is_dangling（已解析在前），同档内按 date_iso DESC。
 #[tauri::command]
 pub fn get_forward_links(
     note_id: String,
@@ -1391,26 +1476,42 @@ pub fn get_forward_links(
         .sqlite()
         .query_map(
             "SELECT n.id, n.rel_path, n.file_name, n.title, n.note_type, n.date_iso, n.tags, \
-                    l.target_text, l.alias \
-             FROM links l JOIN notes n ON n.id = l.target_note_id \
+                    l.target_text, l.alias, l.is_dangling \
+             FROM links l \
+             LEFT JOIN notes n ON n.id = l.target_note_id \
              WHERE l.source_note_id = ?1 \
-             ORDER BY n.date_iso DESC",
+             ORDER BY l.is_dangling ASC, n.date_iso DESC",
             params![note_id],
             |row| {
                 let tags_json: String = row.get("tags")?;
+                let is_dangling: i64 = row.get("is_dangling")?;
+                let target_text: String = row.get("target_text")?;
+                let is_dangling_bool = is_dangling != 0;
+                // file_name 经 LEFT JOIN 后可能为 NULL（dangling 时）；先取，dangling 时回退 target_text 作显示
+                let file_name_opt: Option<String> = row.get("file_name")?;
+                let file_name = file_name_opt.unwrap_or_else(|| {
+                    if is_dangling_bool {
+                        target_text.clone()
+                    } else {
+                        String::new()
+                    }
+                });
                 Ok(Backlink {
                     source: NoteMeta {
-                        id: row.get("id")?,
-                        rel_path: row.get("rel_path")?,
-                        file_name: row.get("file_name")?,
+                        id: row.get::<_, Option<String>>("id")?.unwrap_or_default(),
+                        rel_path: row
+                            .get::<_, Option<String>>("rel_path")?
+                            .unwrap_or_default(),
+                        file_name,
                         title: row.get("title")?,
                         note_type: row.get("note_type")?,
                         date_iso: row.get("date_iso")?,
                         tags: serde_json::from_str(&tags_json).unwrap_or_default(),
                         mtime: 0,
                     },
-                    target_text: row.get("target_text")?,
+                    target_text,
                     alias: row.get("alias")?,
+                    is_dangling: is_dangling_bool,
                 })
             },
         )
@@ -1849,6 +1950,110 @@ mod tests {
             .unwrap()
             .unwrap_or(1);
         assert_eq!(done2, 0, "取消后 done 应回 0");
+    }
+
+    /// M2：toggle 重复任务推进。带 🔁 every week + 📅 的任务 toggle(done=true) →
+    /// due 推进 7 天 + 仍 unchecked（[ ] 保持）。
+    #[test]
+    fn toggle_task_inner_重复任务推进() {
+        use crate::commands::index::index_vault_inner;
+        let (_tmp, vid, vault_dir, db) = setup_lib();
+        // 周报 + 重复 + 截止 2026-07-01（周三）
+        std::fs::write(
+            vault_dir.join("r.md"),
+            "# R\n\n- [ ] 周报 🔁 every week 📅 2026-07-01\n",
+        )
+        .unwrap();
+        index_vault_inner(&vid, &db).unwrap();
+
+        let cur_id = || -> String {
+            db.sqlite()
+                .query_row("SELECT id FROM notes WHERE file_name='r.md'", &[], |r| r.get::<_, String>(0))
+                .unwrap()
+                .unwrap()
+        };
+        let line: i64 = db
+            .sqlite()
+            .query_row(
+                "SELECT source_line FROM tasks WHERE text='周报'",
+                &[],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap();
+
+        // 打勾 → 触发重复推进（不打勾，仅推进 due）
+        let nc = toggle_task_inner(&cur_id(), line, true, &db).unwrap();
+        // checkbox 应保持 [ ]（未真完成）
+        assert!(nc.raw_content.contains("- [ ] 周报"), "重复任务应保持 [ ]");
+        // due_date 应推进到 2026-07-08（+7 天）
+        assert!(
+            nc.raw_content.contains("📅 2026-07-08"),
+            "推进后 due 应为 2026-07-08，实际：{}",
+            nc.raw_content
+        );
+        // tasks.due_date 同步刷新 + done 仍 0
+        let (due, done): (Option<String>, i64) = db
+            .sqlite()
+            .query_row(
+                "SELECT due_date, done FROM tasks WHERE text='周报'",
+                &[],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(due.as_deref(), Some("2026-07-08"), "tasks.due_date 应推进");
+        assert_eq!(done, 0, "done 应保持 0（未真完成）");
+
+        // 再次推进：2026-07-08 → 2026-07-15
+        toggle_task_inner(&cur_id(), line, true, &db).unwrap();
+        let nc2 = fetch_note_content(&cur_id(), &db).unwrap();
+        assert!(nc2.raw_content.contains("📅 2026-07-15"), "二次推进应到 2026-07-15");
+    }
+
+    /// M2：无 due_date 的重复任务推进 → 以今天为基准推进。
+    #[test]
+    fn toggle_task_inner_重复任务无due以今天推进() {
+        use crate::commands::index::index_vault_inner;
+        let (_tmp, vid, vault_dir, db) = setup_lib();
+        std::fs::write(
+            vault_dir.join("d.md"),
+            "# D\n\n- [ ] 每日站会 🔁 every day\n",
+        )
+        .unwrap();
+        index_vault_inner(&vid, &db).unwrap();
+
+        let cur_id = || -> String {
+            db.sqlite()
+                .query_row("SELECT id FROM notes WHERE file_name='d.md'", &[], |r| r.get::<_, String>(0))
+                .unwrap()
+                .unwrap()
+        };
+        let line: i64 = db
+            .sqlite()
+            .query_row(
+                "SELECT source_line FROM tasks WHERE text='每日站会'",
+                &[],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap();
+
+        // 推进：今天 + 1 天
+        let nc = toggle_task_inner(&cur_id(), line, true, &db).unwrap();
+        let today = crate::utils::dates::today_iso();
+        let tomorrow = crate::utils::dates::add_period(
+            crate::utils::dates::normalize_date(&today).unwrap(),
+            "day",
+        )
+        .unwrap();
+        let tmrw_iso = tomorrow.format("%Y-%m-%d").to_string();
+        assert!(
+            nc.raw_content.contains(&format!("📅 {}", tmrw_iso)),
+            "无 due 推进应写回今天的下一日 {}，实际：{}",
+            tmrw_iso,
+            nc.raw_content
+        );
     }
 
     /// 通用临时 vault + DB（TempDir RAII：drop 自动清理 vault_dir + db，零残留）。内联测试共用。

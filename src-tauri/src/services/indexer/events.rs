@@ -20,12 +20,19 @@ pub struct ExtractedEvent {
     pub raw_bullet: Option<String>,
     /// bullet 在全文的行号（1-based），供行级 update/delete 定位
     pub source_line: Option<i32>,
+    /// M1：bullet 内 `#project:名` 标记提取的项目名（行级优先于 frontmatter.project）。
+    /// index.rs 写库时按名匹配 projects.id 填 events.project_id。
+    pub project_name: Option<String>,
 }
 
 static RE_BULLET: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*[-*+]\s+(.+)").unwrap());
 /// 行内时间 HH:MM 或 HH:MM-HH:MM（懒匹配，取第一个）
 static RE_TIME: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\d{1,2}:\d{2}(?:\s*-\s*\d{1,2}:\d{2})?").unwrap());
+/// bullet 内 `#project:名` 标记（项目名取到首个分隔符为止：空白 / # / 中英文标点）
+static RE_PROJECT_TAG: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"#project:([^\s#，。、；：,.;:]+)").unwrap()
+});
 
 const EVENT_SECTION_KEYWORDS: &[&str] = &[
     "关键事件",
@@ -62,6 +69,11 @@ pub fn extract(date_iso: Option<&str>, sections: &[SectionInfo]) -> Vec<Extracte
             }
             let (time, title) = split_time_and_title(raw);
             let source_line = (sec.heading_line + 1 + i) as i32;
+            // M1：bullet 内 #project:名 标记提取（行级，优先于 frontmatter.project）
+            let project_name = RE_PROJECT_TAG
+                .captures(raw)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string());
             out.push(ExtractedEvent {
                 title: Some(title),
                 event_time: time,
@@ -70,6 +82,7 @@ pub fn extract(date_iso: Option<&str>, sections: &[SectionInfo]) -> Vec<Extracte
                 output: None,
                 raw_bullet: Some(raw.to_string()),
                 source_line: Some(source_line),
+                project_name,
             });
         }
     }
@@ -171,5 +184,25 @@ mod tests {
         assert_eq!(ev.len(), 1);
         assert!(ev[0].event_date.is_none(), "无 date_iso → event_date None");
         assert_eq!(ev[0].source_line, Some(9));
+    }
+
+    /// M1：bullet 内 #project:名 标记提取（行级优先于 frontmatter.project）
+    #[test]
+    fn bullet_内_project_标签_提取() {
+        let sections = vec![sec(
+            "关键事件",
+            "- 早会 #project:项目A，讨论方案\n- 普通事件\n",
+            3,
+        )];
+        let ev = extract(Some("2026-04-01"), &sections);
+        assert_eq!(ev.len(), 2);
+        // 第一条 bullet 含 #project:项目A → project_name=Some("项目A")（去尾逗号）
+        assert_eq!(
+            ev[0].project_name.as_deref(),
+            Some("项目A"),
+            "应提取 #project:名 且去尾标点"
+        );
+        // 第二条无标签 → None
+        assert!(ev[1].project_name.is_none());
     }
 }

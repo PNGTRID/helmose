@@ -1,14 +1,27 @@
 // 左面板：Obsidian 式「目录+文件混合树」+ 全库搜索 + 排序
 // 顶部显示 Vault 名；树从根目录内容开始（顶层文件夹+根文件）；节点文字单行省略号。
+// 文件节点支持右键菜单：移动 / 重命名（写回 vault，含路径型引用批量更新确认）。
 import "./FilePanel.css";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Empty, Input, message, Modal, Segmented, Spin, Tree } from "antd";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Button,
+  Dropdown,
+  Empty,
+  Input,
+  message,
+  Modal,
+  Segmented,
+  Spin,
+  Tree,
+  TreeSelect,
+} from "antd";
 import { FileAddOutlined, FolderOpenOutlined, FolderOutlined } from "@ant-design/icons";
+import type { MenuProps } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { openNoteFromMeta } from "../utils/note";
 import { childDirs, fileIcon, makeCompare, type SortMode } from "../utils/tree";
-import type { NoteMeta, SearchResult } from "../types";
+import type { NoteMeta, RefLoc, SearchResult } from "../types";
 
 interface TreeNode {
   key: string;
@@ -23,6 +36,8 @@ export default function FilePanel({ width }: { width: number }) {
   const watcherTick = useVaultStore((s) => s.watcherTick);
 
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
+  // 当前 vault 所有目录扁平数组（listDirs），供移动弹窗的 TreeSelect 用（独立于树构建，避免漂移）
+  const [dirs, setDirs] = useState<string[]>([]);
   // 展开状态持久化（localStorage，下次打开恢复用户展开的目录）
   const [expandedKeys, setExpandedKeys] = useState<string[]>(() => {
     try {
@@ -42,6 +57,21 @@ export default function FilePanel({ width }: { width: number }) {
   // 新建笔记（创建到 00_收件箱，用户后续可移动）
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
+
+  // 移动弹窗状态：moveTarget={ noteId, currentDir, fileName } 或 null
+  const [moveTarget, setMoveTarget] = useState<{
+    noteId: string;
+    currentDir: string;
+    fileName: string;
+  } | null>(null);
+  const [moveDestDir, setMoveDestDir] = useState<string>("");
+
+  // 重命名弹窗状态：renameTarget={ noteId, fileName } 或 null
+  const [renameTarget, setRenameTarget] = useState<{
+    noteId: string;
+    fileName: string;
+  } | null>(null);
+  const [renameValue, setRenameValue] = useState<string>("");
 
   const createNoteFile = async () => {
     if (!vault) return;
@@ -95,22 +125,23 @@ export default function FilePanel({ width }: { width: number }) {
     let cancelled = false;
     setLoading(true);
     Promise.all([api.listDirs(vault.id), api.listAllNotesMeta(vault.id)])
-      .then(([dirs, notes]) => {
+      .then(([d, notes]) => {
         if (cancelled) return;
+        setDirs(d);
         fileMap.current.clear();
         const notesByDir = new Map<string, NoteMeta[]>();
         for (const n of notes) {
-          const d = n.rel_path.includes("/")
+          const dirOfN = n.rel_path.includes("/")
             ? n.rel_path.slice(0, n.rel_path.lastIndexOf("/"))
             : "";
-          if (!notesByDir.has(d)) notesByDir.set(d, []);
-          notesByDir.get(d)!.push(n);
+          if (!notesByDir.has(dirOfN)) notesByDir.set(dirOfN, []);
+          notesByDir.get(dirOfN)!.push(n);
         }
         const cmp = makeCompare(sortMode);
 
         // 构建某目录的直接子（目录 + 文件，混合排序）
         const buildChildren = (dir: string): TreeNode[] => {
-          const subs = childDirs(dir, dirs);
+          const subs = childDirs(dir, d);
           const dirNodes: TreeNode[] = subs.map((sd) => {
             const name = sd.split("/").pop() ?? sd;
             return {
@@ -129,14 +160,38 @@ export default function FilePanel({ width }: { width: number }) {
           const fileNodes: TreeNode[] = (notesByDir.get(dir) ?? []).map((n) => {
             const k = "file:" + n.id;
             fileMap.current.set(k, n);
+            // 文件节点 title 包裹右键菜单（Dropdown trigger=contextMenu）
+            const menuItems: MenuProps["items"] = [
+              {
+                key: "move",
+                label: "移动到…",
+                onClick: () => {
+                  const curDir = n.rel_path.includes("/")
+                    ? n.rel_path.slice(0, n.rel_path.lastIndexOf("/"))
+                    : "";
+                  setMoveDestDir(curDir); // 默认当前目录
+                  setMoveTarget({ noteId: n.id, currentDir: curDir, fileName: n.file_name });
+                },
+              },
+              {
+                key: "rename",
+                label: "重命名…",
+                onClick: () => {
+                  setRenameValue(n.file_name.replace(/\.md$/i, ""));
+                  setRenameTarget({ noteId: n.id, fileName: n.file_name });
+                },
+              },
+            ];
             return {
               key: k,
               sortKey: n.file_name,
               title: (
-                <span className="ob-node-title">
-                  {fileIcon(n.file_name)}
-                  <span className="ob-node-label">{n.file_name}</span>
-                </span>
+                <Dropdown menu={{ items: menuItems }} trigger={["contextMenu"]}>
+                  <span className="ob-node-title">
+                    {fileIcon(n.file_name)}
+                    <span className="ob-node-label">{n.file_name}</span>
+                  </span>
+                </Dropdown>
               ),
               isLeaf: true,
             };
@@ -147,12 +202,13 @@ export default function FilePanel({ width }: { width: number }) {
         setTreeData(buildChildren(""));
         // 首次默认展开顶层目录（之后保留用户展开状态）
         setExpandedKeys((prev) =>
-          prev.length ? prev : childDirs("", dirs).map((d) => "dir:" + d)
+          prev.length ? prev : childDirs("", d).map((x) => "dir:" + x)
         );
       })
       .catch(() => {
         if (cancelled) return;
         setTreeData([]);
+        setDirs([]);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -195,6 +251,151 @@ export default function FilePanel({ width }: { width: number }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault?.id, query]);
+
+  // 把扁平 dirs（""=根）构建成 antd TreeSelect 的树形数据
+  const dirTreeData = useMemo(() => {
+    type DirNode = {
+      value: string; // 目录相对路径（""=根）
+      title: string;
+      selectable: boolean;
+      children?: DirNode[];
+    };
+    const build = (parent: string): DirNode[] => {
+      const subs = childDirs(parent, dirs);
+      return subs.map((sd) => {
+        const name = sd.split("/").pop() ?? sd;
+        return {
+          value: sd,
+          title: name,
+          selectable: true,
+          children: build(sd),
+        };
+      });
+    };
+    // 根节点（value=""）作为可选项；子目录递归构建
+    return [
+      { value: "", title: "（vault 根）", selectable: true, children: build("") },
+    ];
+  }, [dirs]);
+
+  // 提交移动：moveNote → 若有路径型引用（refs_to_update 非空）弹确认 → applyRefUpdates → bumpTick 刷新。
+  // 不 optimistic patch（写 vault 后 note_id 可能因 content_hash 变 → 直接 refresh 重拉，与 toggle/save 一致）
+  const submitMove = async () => {
+    if (!moveTarget) return;
+    if (moveDestDir === moveTarget.currentDir) {
+      message.info("目标目录与当前位置相同");
+      return;
+    }
+    try {
+      const result = await api.moveNote(moveTarget.noteId, moveDestDir);
+      // refs_to_update 非空 → 弹确认（列出引用数 + 涉及笔记路径，用户授权才改其他笔记原文）
+      if (result.refs_to_update.length > 0) {
+        const ok = await new Promise<boolean>((resolve) => {
+          Modal.confirm({
+            title: `更新 ${result.refs_to_update.length} 处路径引用？`,
+            content: (
+              <div style={{ fontSize: 12 }}>
+                <div>移动后其他笔记中引用此文件路径的链接将失效，</div>
+                <div>需同步更新以下笔记中的引用：</div>
+                <ul style={{ marginTop: 4, maxHeight: 160, overflow: "auto", paddingLeft: 18 }}>
+                  {result.refs_to_update.slice(0, 20).map((r, i) => (
+                    <li key={i}>
+                      <code>{r.old_path}</code>
+                      {" → "}
+                      <code>{r.new_path}</code>
+                    </li>
+                  ))}
+                  {result.refs_to_update.length > 20 && (
+                    <li>…（共 {result.refs_to_update.length} 处，仅显示前 20）</li>
+                  )}
+                </ul>
+              </div>
+            ),
+            okText: "更新引用",
+            cancelText: "只移动",
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false),
+          });
+        });
+        if (ok) {
+          await api.applyRefUpdates(result.refs_to_update as RefLoc[]);
+          message.success(
+            `已移动到「${moveDestDir || "根"}」并更新 ${result.refs_to_update.length} 处引用`
+          );
+        } else {
+          message.success(`已移动到「${moveDestDir || "根"}」（引用未更新）`);
+        }
+      } else {
+        message.success(`已移动到「${moveDestDir || "根"}」`);
+      }
+      setMoveTarget(null);
+      setMoveDestDir("");
+      // 刷新文件树（写 vault 后 note_id 可能变 → 重拉而非 patch）
+      useVaultStore.getState().bumpTick();
+    } catch (e) {
+      message.error(`移动失败：${e}`);
+    }
+  };
+
+  // 提交重命名：renameNote → 同 move 流程的引用更新确认 → bumpTick。
+  const submitRename = async () => {
+    if (!renameTarget) return;
+    const name = renameValue.trim();
+    if (!name) {
+      message.warning("请输入新文件名");
+      return;
+    }
+    const newFileName = name.toLowerCase().endsWith(".md") ? name : `${name}.md`;
+    if (newFileName === renameTarget.fileName) {
+      message.info("文件名未变化");
+      return;
+    }
+    try {
+      const result = await api.renameNote(renameTarget.noteId, newFileName);
+      if (result.refs_to_update.length > 0) {
+        const ok = await new Promise<boolean>((resolve) => {
+          Modal.confirm({
+            title: `更新 ${result.refs_to_update.length} 处路径引用？`,
+            content: (
+              <div style={{ fontSize: 12 }}>
+                <div>重命名后其他笔记中引用此文件路径的链接将失效，</div>
+                <div>需同步更新以下笔记中的引用：</div>
+                <ul style={{ marginTop: 4, maxHeight: 160, overflow: "auto", paddingLeft: 18 }}>
+                  {result.refs_to_update.slice(0, 20).map((r, i) => (
+                    <li key={i}>
+                      <code>{r.old_path}</code>
+                      {" → "}
+                      <code>{r.new_path}</code>
+                    </li>
+                  ))}
+                  {result.refs_to_update.length > 20 && (
+                    <li>…（共 {result.refs_to_update.length} 处，仅显示前 20）</li>
+                  )}
+                </ul>
+              </div>
+            ),
+            okText: "更新引用",
+            cancelText: "只重命名",
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false),
+          });
+        });
+        if (ok) {
+          await api.applyRefUpdates(result.refs_to_update as RefLoc[]);
+          message.success(`已重命名为「${newFileName}」并更新 ${result.refs_to_update.length} 处引用`);
+        } else {
+          message.success(`已重命名为「${newFileName}」（引用未更新）`);
+        }
+      } else {
+        message.success(`已重命名为「${newFileName}」`);
+      }
+      setRenameTarget(null);
+      setRenameValue("");
+      useVaultStore.getState().bumpTick();
+    } catch (e) {
+      message.error(`重命名失败：${e}`);
+    }
+  };
 
   const onSelect = (keys: React.Key[]) => {
     const k = keys[0] as string | undefined;
@@ -253,6 +454,60 @@ export default function FilePanel({ width }: { width: number }) {
           onPressEnter={createNoteFile}
         />
       </Modal>
+
+      {/* 移动笔记弹窗：TreeSelect 选目标目录（含 vault 根作选项） */}
+      <Modal
+        open={!!moveTarget}
+        title={`移动：${moveTarget?.fileName ?? ""}`}
+        onCancel={() => {
+          setMoveTarget(null);
+          setMoveDestDir("");
+        }}
+        onOk={submitMove}
+        okText="移动"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <div style={{ fontSize: 12, color: "var(--ob-text-faint)", marginBottom: 6 }}>
+          选择目标目录（移动后如检测到其他笔记引用了此文件路径，将提示是否同步更新引用）
+        </div>
+        <TreeSelect
+          style={{ width: "100%" }}
+          value={moveDestDir}
+          onChange={(v) => setMoveDestDir(v ?? "")}
+          treeData={dirTreeData}
+          treeDefaultExpandAll
+          placeholder="选择目标目录"
+          showSearch
+          treeNodeFilterProp="title"
+        />
+      </Modal>
+
+      {/* 重命名笔记弹窗：Input 改文件名（不带 .md 自动补） */}
+      <Modal
+        open={!!renameTarget}
+        title={`重命名：${renameTarget?.fileName ?? ""}`}
+        onCancel={() => {
+          setRenameTarget(null);
+          setRenameValue("");
+        }}
+        onOk={submitRename}
+        okText="重命名"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <div style={{ fontSize: 12, color: "var(--ob-text-faint)", marginBottom: 6 }}>
+          输入新文件名（不带 .md 会自动补全；目录不变）
+        </div>
+        <Input
+          autoFocus
+          placeholder="新文件名"
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onPressEnter={submitRename}
+        />
+      </Modal>
+
       <div style={{ padding: 6 }}>
         <Input
           placeholder="搜索全库…"

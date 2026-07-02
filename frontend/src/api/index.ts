@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { AgentExport, Backlink, BackupInfo, Event, GraphData, IndexStats, Note, NoteContent, NoteMeta, Project, ProjectProgress, ScaffoldStats, SearchResult, TagCount, Task, UpdateStatus, Vault, VaultInput } from '../types';
+import type { AgentExport, AiCoachResult, AiMainline, AiSettings, AiTomorrowResult, Backlink, BackupInfo, Event, GraphData, IndexStats, MoveResult, Note, NoteContent, NoteMeta, Okr, Project, ProjectProgress, RefLoc, Reminder, ScaffoldStats, SearchResult, TagCount, Task, UpdateStatus, Vault, VaultInput } from '../types';
 
 export async function ping(): Promise<string> {
   return invoke<string>('ping');
@@ -381,15 +381,108 @@ export async function getProjectProgress(vaultId: string): Promise<ProjectProgre
   return invoke<ProjectProgress[]>('get_project_progress', { vaultId });
 }
 
-/** 查询事件（可按 event_date 区间 [from, to] 过滤，YYYY-MM-DD） */
+/** 查询事件（可按 event_date 区间 [from, to] 过滤、按 project_id 过滤） */
 export async function listEvents(
   vaultId: string,
   from?: string,
-  to?: string
+  to?: string,
+  projectId?: string
 ): Promise<Event[]> {
   return invoke<Event[]>('list_events', {
     vaultId,
     from: from ?? null,
     to: to ?? null,
+    projectId: projectId ?? null,
   });
+}
+
+/** M1：查询 OKR（可按 quarter 过滤；排序 quarter DESC、priority P0 在前） */
+export async function listOkrs(
+  vaultId: string,
+  quarter?: string
+): Promise<Okr[]> {
+  return invoke<Okr[]>('list_okrs', {
+    vaultId,
+    quarter: quarter ?? null,
+  });
+}
+
+// ============================================================
+// M2：到期提醒（ensure 扫 due 任务生成 + fire 到期发桌面通知）
+// ============================================================
+
+/** 扫 tasks 表 due_date 未来 N 天的未完成任务 → 生成 reminders（幂等：同 task_id 已存在跳过）。
+ *  返回新生成的 reminder 数量。 */
+export async function ensureReminders(vaultId: string): Promise<number> {
+  return invoke<number>('ensure_reminders', { vaultId });
+}
+
+/** 查到期未发的 reminder → 发桌面通知 + 标 fired=1。返回本次触发数量。
+ *  由 App.tsx 启动后 setInterval 60s 调用。 */
+export async function fireDueReminders(): Promise<number> {
+  return invoke<number>('fire_due_reminders');
+}
+
+/** 占位类型导出（前端如有 reminders 列表 UI 可用）。 */
+export type { Reminder };
+
+/** M1：移动笔记到目标目录（保持文件名）。索引层同步 + 返回路径型引用列表。 */
+export async function moveNote(
+  noteId: string,
+  targetDir: string
+): Promise<MoveResult> {
+  return invoke<MoveResult>('move_note', { noteId, targetDir });
+}
+
+/** M1：重命名笔记（保持目录）。索引层同步 + 返回路径型引用列表。 */
+export async function renameNote(
+  noteId: string,
+  newFileName: string
+): Promise<MoveResult> {
+  return invoke<MoveResult>('rename_note', { noteId, newFileName });
+}
+
+/** M1：应用路径型引用更新（move 后用户授权改其他笔记原文，返回更新的笔记数） */
+export async function applyRefUpdates(
+  refLocations: RefLoc[]
+): Promise<number> {
+  return invoke<number>('apply_ref_updates', { refLocations });
+}
+
+// ============================================================
+// M4：AI 教练层（命令封装，对齐后端 snake_case）
+// ============================================================
+
+/** 读 AI 设置（api_key 在返回值里，仅前端设置页用） */
+export async function getAiSettings(): Promise<AiSettings> {
+  return invoke<AiSettings>('get_ai_settings');
+}
+
+/** 写 AI 设置（合并到 config.json 的 ai 子对象，保留其他字段） */
+export async function setAiSettings(settings: AiSettings): Promise<AiSettings> {
+  return invoke<AiSettings>('set_ai_settings', { settings });
+}
+
+/** AI 主线判定（未配 key 自动走启发式，source 标降级） */
+export async function aiMainline(vaultId: string): Promise<AiMainline> {
+  return invoke<AiMainline>('ai_mainline', { vaultId });
+}
+
+/** AI 每日教练建议（未配 key 自动走启发式，source 标降级） */
+export async function aiCoach(vaultId: string): Promise<AiCoachResult> {
+  return invoke<AiCoachResult>('ai_coach', { vaultId });
+}
+
+/** AI 明日一句（写回当日笔记「明日一句」section；未配 key 走启发式） */
+export async function aiTomorrow(vaultId: string): Promise<AiTomorrowResult> {
+  return invoke<AiTomorrowResult>('ai_tomorrow', { vaultId });
+}
+
+/** 编辑明日一句后写回（后端在「明日一句」section 内 update_line / append_bullet 收口：
+ *  备份 + 重索引；前端不再处理文本，避免无 section 约束的全局 replaceFirst 误伤）。 */
+export async function updateTomorrowSentence(
+  noteId: string,
+  newSentence: string
+): Promise<AiTomorrowResult> {
+  return invoke<AiTomorrowResult>('update_tomorrow_sentence', { noteId, newSentence });
 }

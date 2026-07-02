@@ -135,6 +135,7 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
             tx.execute("DELETE FROM events WHERE vault_id = ?1", params![vault_id])?;
             tx.execute("DELETE FROM tomorrow_sentences WHERE vault_id = ?1", params![vault_id])?;
             tx.execute("DELETE FROM projects WHERE vault_id = ?1", params![vault_id])?;
+            tx.execute("DELETE FROM okrs WHERE vault_id = ?1", params![vault_id])?;
             tx.execute("DELETE FROM notes WHERE vault_id = ?1", params![vault_id])?;
 
             // 第一遍：所有 notes（先建立 notes 表——wikilink 可能指向遍历顺序
@@ -168,6 +169,10 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
 
             // 第二遍：tasks + links（此时所有 notes 已在表，外键约束满足）
             for (id, p) in &with_id {
+                // 本笔记内 (source_line) → task_id 的映射，供子任务 parent_task_id 翻译。
+                // 子任务的 parent_source_line 指向同笔记内某顶层任务的 1-based 行号；
+                // 插入顺序保证父先于子（按 source_line 升序），故查表时父 id 已存在。
+                let mut line_to_task_id: HashMap<i32, String> = HashMap::new();
                 for t in &p.tasks {
                     let tid = uuid::Uuid::new_v4().to_string();
                     let created = crate::utils::dates::now_iso8601();
@@ -178,10 +183,14 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                     } else {
                         None
                     };
+                    // parent_task_id 翻译：parent_source_line → 同笔记内父 task id（无则 NULL）
+                    let parent_task_id: Option<String> = t
+                        .parent_source_line
+                        .and_then(|pl| line_to_task_id.get(&pl).cloned());
                     tx.execute(
                         "INSERT INTO tasks \
-                         (id,note_id,vault_id,text,done,due_date,source,source_line,created_at,completed_at,status,priority,urgency) \
-                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                         (id,note_id,vault_id,text,done,due_date,source,source_line,created_at,completed_at,status,priority,urgency,repeat_rule,parent_task_id) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
                         params![
                             tid,
                             id,
@@ -195,9 +204,16 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                             completed_at,
                             t.status,
                             t.priority,
-                            t.urgency
+                            t.urgency,
+                            t.repeat_rule,
+                            parent_task_id
                         ],
                     )?;
+                    // 登记本任务（按 source_line）供后续子任务查父。section 通道 B source_line=None
+                    // 不入表（其本就无父子语义，parent_source_line 也恒 None）。
+                    if let Some(sl) = t.source_line {
+                        line_to_task_id.insert(sl, tid.clone());
+                    }
                     stats.tasks += 1;
                 }
 
@@ -255,9 +271,15 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
             }
             // 项目数已含在 notes 统计里，不另计 IndexStats。
 
-            // 第四遍：events（笔记「关键事件」等 section 的 bullet → events 表）
+            // 第四遍：events（笔记「关键事件」等 section 的 bullet → events 表）。
+            // M1：project_id 行级优先——bullet 内 `#project:名` 标记 → proj_name_to_id 匹配；
+            //    匹配不到或无标签留 NULL，由第六遍 frontmatter.project 兜底回填。
             for (id, p) in &with_id {
                 for ev in &p.events {
+                    let pid = ev
+                        .project_name
+                        .as_deref()
+                        .and_then(|n| proj_name_to_id.get(n));
                     tx.execute(
                         "INSERT INTO events \
                          (id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet,source_line) \
@@ -271,8 +293,7 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                             ev.event_date,
                             ev.content,
                             ev.output,
-                            // project_id 暂不关联（M1 未做 event→project 映射，留 backlog）
-                            None::<String>,
+                            pid,
                             ev.raw_bullet,
                             ev.source_line,
                         ],
@@ -285,6 +306,30 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                 "DELETE FROM tomorrow_sentences WHERE vault_id = ?1",
                 params![vault_id],
             )?;
+            // okrs（DELETE 在事务开头统一做）—— strategy/project 文档的 KR section 提取。
+            // 纯解析在 indexer/okrs.rs，这里只写库；raw_row 取 kr_text 兜底（与 bullet 同源）。
+            for (id, p) in &with_id {
+                for o in indexer::okrs::extract(p) {
+                    let raw_row = o.kr_text.clone();
+                    tx.execute(
+                        "INSERT INTO okrs \
+                         (id,vault_id,source_note_id,quarter,objective,priority,kr_text,target_value,current_value,raw_row) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                        params![
+                            uuid::Uuid::new_v4().to_string(),
+                            vault_id,
+                            id,
+                            o.quarter,
+                            o.objective,
+                            o.priority,
+                            o.kr_text,
+                            o.target_value,
+                            o.current_value,
+                            raw_row,
+                        ],
+                    )?;
+                }
+            }
             for (id, p) in &with_id {
                 if let (Some(date), Some(s)) = (&p.date_iso, &p.tomorrow_sentence) {
                     tx.execute(
@@ -304,6 +349,8 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
             // 第六遍：回填 tasks + events 的 project_id —— frontmatter.project（项目名）按名匹配 projects。
             // 契约：frontmatter.project 为项目名字符串（Obsidian 习惯）。同笔记的 tasks 与 events 共享关联
             // （让 get_project_progress 聚合生效 + 日历事件可按项目筛）。匹配不到 → project_id 保持 NULL。
+            // M1：events 在第四遍已尝试 bullet 内 `#project:名` 行级匹配，这里仅回填仍 NULL 的
+            //    （`AND project_id IS NULL` 避免覆盖行级标记）。
             for (id, p) in &with_id {
                 let proj_name = match p.frontmatter.get("project").and_then(|v| v.as_str()) {
                     Some(s) => s,
@@ -315,7 +362,7 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
                         params![pid, id, vault_id],
                     )?;
                     tx.execute(
-                        "UPDATE events SET project_id = ?1 WHERE note_id = ?2 AND vault_id = ?3",
+                        "UPDATE events SET project_id = ?1 WHERE note_id = ?2 AND vault_id = ?3 AND project_id IS NULL",
                         params![pid, id, vault_id],
                     )?;
                 }
@@ -878,6 +925,54 @@ mod tests {
             "projects 表应有 owner 列，实际 {:?}",
             proj_cols
         );
+
+        // M2：tasks 表应有 repeat_rule + parent_task_id 两列
+        for needed in ["repeat_rule", "parent_task_id"] {
+            assert!(
+                task_cols.iter().any(|c| c == needed),
+                "tasks 表应有 {} 列（M2），实际 {:?}",
+                needed,
+                task_cols
+            );
+        }
+
+        // M2：reminders 表应存在 + idx_reminders_at 索引存在
+        let rem_cols: Vec<String> = db
+            .sqlite()
+            .query_map(
+                "PRAGMA table_info(reminders)",
+                &[],
+                |r| r.get::<_, String>(1),
+            )
+            .unwrap();
+        for needed in [
+            "id",
+            "task_id",
+            "note_id",
+            "vault_id",
+            "remind_at",
+            "fired",
+            "task_text",
+            "due_date",
+            "created_at",
+        ] {
+            assert!(
+                rem_cols.iter().any(|c| c == needed),
+                "reminders 表应有 {} 列，实际 {:?}",
+                needed,
+                rem_cols
+            );
+        }
+        let idx_cnt: i64 = db
+            .sqlite()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_reminders_at'",
+                &[],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            .unwrap_or(0);
+        assert_eq!(idx_cnt, 1, "idx_reminders_at 索引应存在");
     }
 
     /// M3 旧库 backfill：模拟旧库 tasks 行（done=1，无 status 列）→ init_schema 后 status='done' 反填。
