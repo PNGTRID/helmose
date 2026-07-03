@@ -6,7 +6,7 @@
 //   3. 排除目录与 index.rs 保持一致，树视图 = 索引视图
 // ============================================================
 
-use crate::models::{NoteContent, NoteMeta};
+use crate::models::{MigrateItem, MigratePlan, MigratePreview, NoteContent, NoteMeta};
 use crate::services::Database;
 use crate::services::indexer::tasks;
 use crate::utils::exclude::{is_excluded, is_excluded_rel};
@@ -766,6 +766,122 @@ pub fn set_task_urgency(
     set_task_urgency_inner(&note_id, source_line, &urgency, style, db.inner())
 }
 
+/// 批量迁移任务标记（GTD 存量固化 / 风格互转）。
+/// 把每个 MigratePlan 指定行 rewrite 为新 priority + urgency（剥旧三格式 + 按 marking_style 追加新标记），
+/// 同一 note 的多个 plan 合并成一次 read + 一次 save（一次 .helmose/backup 备份 + 重索引）。
+/// dry_run=true 只返回 before/after 预览不写盘；false 经 save_lines 收口（= save_note_content_inner 备份+重索引）。
+/// 保留行首缩进 + checkbox 前缀 + due/repeat 标记（strip_* 只剥 priority/urgency 标记段）。
+/// 目标 priority/urgency 由前端按 effective 象限算好传入（避免前后端重复派生 + Rust 日期运算）。
+pub fn migrate_task_markers_inner(
+    plans: &[MigratePlan],
+    marking_style: &str,
+    dry_run: bool,
+    db: &Database,
+) -> Result<MigratePreview, String> {
+    use crate::services::indexer::tasks;
+    use std::collections::HashMap;
+
+    validate_marking_style(marking_style)?;
+
+    if plans.is_empty() {
+        return Ok(MigratePreview { note_count: 0, item_count: 0, items: vec![], applied: false });
+    }
+
+    // 按 note_id 分组（同一 note 的多个 plan 合并成一次 read/save，避免重复 IO + 备份爆炸）
+    let mut by_note: HashMap<String, Vec<&MigratePlan>> = HashMap::new();
+    for p in plans {
+        by_note.entry(p.note_id.clone()).or_default().push(p);
+    }
+
+    let mut items: Vec<MigrateItem> = Vec::new();
+    let mut note_count = 0usize;
+
+    for (note_id, note_plans) in by_note {
+        let full = read_full(&note_id, db)?;
+        let body = body_of(&full);
+        let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
+        let trailing_nl = body.ends_with('\n');
+        let (rel, _root) = note_rel_and_root(&note_id, db)?;
+
+        for p in note_plans {
+            if p.source_line <= 0 {
+                continue;
+            }
+            let idx = (p.source_line - 1) as usize;
+            if idx >= lines.len() {
+                continue;
+            }
+            let before = lines[idx].clone();
+
+            // rewrite：风格 sniff（原行已有明确格式沿用，否则 marking_style）→ 剥旧 priority+urgency → 按目标追加
+            let style = tasks::sniff_priority_style(&before).unwrap_or(marking_style);
+            let mut cleaned = tasks::strip_priority_marks(&before);
+            cleaned = tasks::strip_urgency_marks(&cleaned);
+            // 追加 priority（>0）：obsidian emoji / helmose priority:N（与 set_task_priority_inner 同款）
+            if p.priority > 0 {
+                let n = p.priority.clamp(0, tasks::PRI_HIGH);
+                let mark = if style == "obsidian" {
+                    tasks::pri_to_obsidian_emoji(n).to_string()
+                } else {
+                    format!("priority:{}", n)
+                };
+                cleaned = format!("{} {}", cleaned, mark);
+            }
+            // 追加 urgency（high/low；"" 不追加 = 清空/未设，与 set_task_urgency_inner 同款）
+            match p.urgency.as_str() {
+                "high" => {
+                    let mark = if marking_style == "obsidian" { "🔥" } else { "urgency:high" };
+                    cleaned = format!("{} {}", cleaned, mark);
+                }
+                "low" => {
+                    cleaned = format!("{} urgency:low", cleaned);
+                }
+                _ => {}
+            }
+
+            lines[idx] = cleaned.clone();
+            items.push(MigrateItem {
+                note_id: note_id.clone(),
+                rel_path: rel.clone(),
+                source_line: p.source_line,
+                before,
+                after: cleaned,
+            });
+        }
+
+        if !dry_run {
+            // 按 note 合并一次 save（备份 + 重索引，复用 save_lines 收口 = save_note_content_inner）
+            save_lines(&note_id, &full, lines, trailing_nl, db)?;
+        }
+        note_count += 1;
+    }
+
+    let item_count = items.len();
+    Ok(MigratePreview {
+        note_count,
+        item_count,
+        items: items.into_iter().take(50).collect(),
+        applied: !dry_run,
+    })
+}
+
+/// 批量迁移任务标记（命令壳）。前端算好 plans（每条目标 priority/urgency）传入。
+#[tauri::command]
+pub fn migrate_task_markers(
+    plans: Vec<MigratePlan>,
+    marking_style: String,
+    dry_run: bool,
+    db: State<'_, Database>,
+) -> Result<MigratePreview, String> {
+    tracing::info!(
+        plan_count = plans.len(),
+        marking_style = %marking_style,
+        dry_run,
+        "migrate_task_markers"
+    );
+    migrate_task_markers_inner(&plans, &marking_style, dry_run, db.inner())
+}
+
 /// 删除笔记核心逻辑：**软删除**——移到 <vault>/.helmose/trash/（可恢复），
 /// 不硬删 vault 原文；DB 行经 incremental::remove_rel 级联清除（FK CASCADE）。
 /// 铁律：用户动作触发 + 软删可恢复（比硬删安全）。
@@ -1147,7 +1263,8 @@ fn section_insert_index(lines: &[String], section: &str) -> Option<usize> {
 }
 
 /// 向指定 section 末尾追加 bullet → 复用 save。
-/// as_task=true → `- [ ] {text}`（任务）；false → `- {text}`（事件）。
+/// text 已含 bullet 前缀（`- `/`- [ ]`，含缩进子任务）→ 原样追加，避免双前缀；
+/// 否则按 as_task 加前缀（true → `- [ ] {text}` 任务；false → `- {text}` 事件）。
 /// section 未找到 → Err（不静默追加到文末）。
 pub fn append_bullet_inner(
     note_id: &str,
@@ -1161,7 +1278,10 @@ pub fn append_bullet_inner(
     let mut lines: Vec<String> = body.lines().map(String::from).collect();
     let insert_at = section_insert_index(&lines, section)
         .ok_or_else(|| format!("未找到 section: {}", section))?;
-    let bullet = if as_task {
+    let bullet = if text.trim_start().starts_with("- ") {
+        // 前端传入完整 bullet（buildTaskBullet 已含 `- [ ]` 前缀，含缩进子任务），原样追加
+        text.to_string()
+    } else if as_task {
         format!("- [ ] {}", text)
     } else {
         format!("- {}", text)

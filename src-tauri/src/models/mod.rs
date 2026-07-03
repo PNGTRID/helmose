@@ -18,7 +18,7 @@ pub use ai::{AiCoachResult, AiMainline, AiSettings, AiTomorrowResult};
 pub use event::Event;
 pub use life_state::AgentExport;
 pub use note::{Backlink, GraphData, GraphEdge, GraphNode, Note, NoteContent, NoteMeta, SearchResult};
-pub use note_move::{MoveResult, RefLoc};
+pub use note_move::{MigrateItem, MigratePlan, MigratePreview, MoveResult, RefLoc};
 pub use okr::Okr;
 pub use project::{Project, ProjectProgress};
 pub use reminder::Reminder;

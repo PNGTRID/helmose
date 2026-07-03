@@ -67,6 +67,8 @@ pub fn run() {
             commands::library::set_task_status,
             commands::library::set_task_priority,
             commands::library::set_task_urgency,
+            // 阶段四：批量迁移任务标记（GTD 存量固化 / 风格互转；碰 vault 原文，前端 dry-run 预览 + 手动触发）
+            commands::library::migrate_task_markers,
             // 行级就地写入（inline-crud）
             commands::library::update_line,
             commands::library::delete_line,
@@ -103,6 +105,8 @@ pub fn run() {
             commands::note_move::rename_note,
             // M1：路径型引用授权更新（move 后用户授权改其他笔记原文）
             commands::note_move::apply_ref_updates,
+            // 删除笔记（移 vault/.trash/ 可恢复 + 从索引移除）
+            commands::note_move::move_to_trash,
             // 脚手架（新建知识库骨架）
             commands::scaffold::scaffold_vault,
             // 全库搜索（FTS5）
