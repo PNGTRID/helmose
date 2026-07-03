@@ -5,7 +5,7 @@
 import "./QuickAddTaskModal.css";
 import { useEffect, useState } from "react";
 import { DatePicker, Modal, Segmented, Select, message } from "antd";
-import type { Dayjs } from "dayjs";
+import dayjs, { type Dayjs } from "dayjs";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useActiveProjects } from "../hooks/useActiveProjects";
@@ -21,8 +21,8 @@ interface Props {
 
 const URGENCY_OPTIONS = [
   { label: (<><AppIcon name="fire" size={12} /> 紧急</>), value: "high" },
-  { label: "重要", value: "mid" },
-  { label: "一般", value: "low" },
+  { label: "未设", value: "" },
+  { label: "不紧急", value: "low" },
 ];
 
 /**
@@ -44,8 +44,9 @@ export default function QuickAddTaskModal({ open, onCancel, onSuccess }: Props) 
   const { projects, loading: projectsLoading } = useActiveProjects();
 
   const [text, setText] = useState("");
-  const [due, setDue] = useState<Dayjs | null>(null);
-  const [urgency, setUrgency] = useState<"high" | "mid" | "low">("low");
+  // 默认当天 + 紧急（q3 紧急不重要，与 PlannerPage 输入条新建默认一致）
+  const [due, setDue] = useState<Dayjs | null>(() => dayjs());
+  const [urgency, setUrgency] = useState<"high" | "low" | "">("high");
   const [projectName, setProjectName] = useState<string | null>(null);
   // 重复规则（""=不重复；其余值取自 REPEAT_OPTIONS.value，对齐后端白名单）
   const [repeatRule, setRepeatRule] = useState<string>("");
@@ -60,8 +61,8 @@ export default function QuickAddTaskModal({ open, onCancel, onSuccess }: Props) 
   useEffect(() => {
     if (!open) {
       setText("");
-      setDue(null);
-      setUrgency("low");
+      setDue(dayjs());
+      setUrgency("high");
       setProjectName(null);
       setRepeatRule("");
       setParentTaskId(null);
@@ -120,8 +121,8 @@ export default function QuickAddTaskModal({ open, onCancel, onSuccess }: Props) 
       //    归属「今日待办」section 内最近的顶层父任务）
       const finalBullet =
         parentTaskId != null ? `  ${bullet}` : bullet;
-      // 4. 追加到「今日待办」section（asTask=true → 已含 `- [ ]` 前缀）
-      await api.appendBullet(nc.id, "今日待办", finalBullet, true);
+      // 4. 追加到「今日待办」section（asTask=false：finalBullet 已含 `- [ ]` 前缀，原样追加避免双前缀导致 indexer 解析失败 → ghost）
+      await api.appendBullet(nc.id, "今日待办", finalBullet, false);
       message.success("已添加到今日待办");
       onSuccess?.();
       onCancel();
@@ -172,7 +173,7 @@ export default function QuickAddTaskModal({ open, onCancel, onSuccess }: Props) 
           <Segmented
             options={URGENCY_OPTIONS}
             value={urgency}
-            onChange={(v) => setUrgency(v as "high" | "mid" | "low")}
+            onChange={(v) => setUrgency(v as "high" | "low" | "")}
           />
         </div>
         <div className="qa-task-row">

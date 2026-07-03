@@ -15,11 +15,14 @@ import {
   Tree,
   TreeSelect,
 } from "antd";
-import { FileAddOutlined, FolderOpenOutlined, FolderOutlined } from "@ant-design/icons";
+import { CaretRightOutlined, FileAddOutlined, FolderOpenOutlined, FolderOutlined } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
+import { useTabsStore } from "../stores/tabs";
 import { openNoteFromMeta } from "../utils/note";
+import { getRecent } from "../utils/recentlyOpened";
+import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import { childDirs, fileIcon, makeCompare, type SortMode } from "../utils/tree";
 import type { NoteMeta, RefLoc, SearchResult } from "../types";
 
@@ -34,6 +37,29 @@ interface TreeNode {
 export default function FilePanel({ width }: { width: number }) {
   const vault = useVaultStore((s) => s.vault);
   const watcherTick = useVaultStore((s) => s.watcherTick);
+
+  // 最近打开区（搜索框下方）：消费 recentlyOpened.ts 的 localStorage 记录。
+  // 防 id 漂移：note_id 由 content_hash 派生（任何编辑都会变），故按 rel_path 在当前全量 meta
+  // 里命中后再展示，并取最新 meta（id/title 都是当前的），点击不会跳到失效 id。
+  const { notes } = useAllNotesMeta();
+  const [recentTick, setRecentTick] = useState(0);
+  // 最近打开折叠态（默认折叠——左栏空间紧，按需展开）
+  const [recentExpanded, setRecentExpanded] = useState(false);
+  const recents = useMemo(() => {
+    // recentTick 仅作重算触发器：点击最近项后 localStorage 已被 pushRecent 更新（tabs.ts），
+    // bump 它让本 memo 重算，把刚打开的项置顶（notes 未变，不靠它驱动）。
+    const byPath = new Map<string, NoteMeta>();
+    for (const n of notes) byPath.set(n.rel_path, n);
+    return getRecent()
+      .filter((r) => byPath.has(r.rel_path))
+      .slice(0, 5)
+      .map((r) => byPath.get(r.rel_path)!);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notes, recentTick]);
+  const openRecent = (n: NoteMeta) => {
+    openNoteFromMeta(n);
+    setRecentTick((t) => t + 1);
+  };
 
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   // 当前 vault 所有目录扁平数组（listDirs），供移动弹窗的 TreeSelect 用（独立于树构建，避免漂移）
@@ -180,6 +206,13 @@ export default function FilePanel({ width }: { width: number }) {
                   setRenameValue(n.file_name.replace(/\.md$/i, ""));
                   setRenameTarget({ noteId: n.id, fileName: n.file_name });
                 },
+              },
+              { type: "divider", key: "divider" },
+              {
+                key: "delete",
+                label: "删除（移到回收站）",
+                danger: true,
+                onClick: () => submitDelete(n.id, n.file_name),
               },
             ];
             return {
@@ -397,6 +430,31 @@ export default function FilePanel({ width }: { width: number }) {
     }
   };
 
+  // 删除笔记（移到 vault/.trash/ 可恢复）：二次确认 → moveNoteToTrash → 关对应 tab + 刷新。
+  // 关 tab：避免删后留个指向已移走笔记的失效 tab；close 会自动把 active 切到相邻 tab。
+  const submitDelete = async (noteId: string, fileName: string) => {
+    const ok = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: "移到回收站？",
+        content: `「${fileName}」将移到 vault/.trash/，可从回收站恢复，不会真正删除文件。`,
+        okText: "移到回收站",
+        okType: "danger",
+        cancelText: "取消",
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+    if (!ok) return;
+    try {
+      const trashPath = await api.moveNoteToTrash(noteId);
+      message.success(`已移到回收站：${trashPath}`);
+      useTabsStore.getState().close(`note:${noteId}`);
+      useVaultStore.getState().bumpTick();
+    } catch (e) {
+      message.error(`删除失败：${e}`);
+    }
+  };
+
   const onSelect = (keys: React.Key[]) => {
     const k = keys[0] as string | undefined;
     if (!k) return;
@@ -517,27 +575,54 @@ export default function FilePanel({ width }: { width: number }) {
           size="small"
         />
       </div>
+      {!isSearch && recents.length > 0 && (
+        <div className="ob-recent">
+          <div
+            className={`ob-recent-title ${recentExpanded ? "expanded" : ""}`}
+            onClick={() => setRecentExpanded((v) => !v)}
+            title={recentExpanded ? "收起最近打开" : "展开最近打开"}
+          >
+            <CaretRightOutlined />
+            <span>最近打开</span>
+            <span className="ob-recent-count">{recents.length}</span>
+          </div>
+          {recentExpanded && (
+            <div className="ob-recent-list">
+              {recents.map((n) => (
+                <div key={n.id} className="ob-file-item" onClick={() => openRecent(n)}>
+                  <span style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%" }}>
+                    {fileIcon(n.file_name)}
+                    <span className="ob-node-label">{n.file_name}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div className="ob-panel-body" ref={bodyRef}>
         {isSearch ? (
-          searching ? (
-            <Spin size="small" />
-          ) : results.length === 0 ? (
-            <Empty description="无匹配" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          ) : (
-            results.map((r) => (
-              <div
-                key={r.id}
-                className="ob-file-item"
-                onClick={() => openNoteFromMeta(r)}
-              >
-                <span style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%" }}>
-                  {fileIcon(r.file_name)}
-                  <span className="ob-node-label">{r.file_name}</span>
-                </span>
-                <div className="ob-file-sub ob-node-label">{r.rel_path}</div>
-              </div>
-            ))
-          )
+          <div className="ob-search-results">
+            {searching ? (
+              <Spin size="small" />
+            ) : results.length === 0 ? (
+              <Empty description="无匹配" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              results.map((r) => (
+                <div
+                  key={r.id}
+                  className="ob-file-item"
+                  onClick={() => openNoteFromMeta(r)}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%" }}>
+                    {fileIcon(r.file_name)}
+                    <span className="ob-node-label">{r.file_name}</span>
+                  </span>
+                  <div className="ob-file-sub ob-node-label">{r.rel_path}</div>
+                </div>
+              ))
+            )}
+          </div>
         ) : loading && treeData.length === 0 ? (
           <Spin size="small" />
         ) : (

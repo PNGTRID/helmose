@@ -10,7 +10,6 @@ import {
   Input,
   Space,
   Spin,
-  Tag,
   Typography,
   message,
 } from "antd";
@@ -20,6 +19,7 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import * as api from "../../api";
+import "./AiCoachCard.css";
 import type {
   AiCoachResult,
   AiMainline,
@@ -53,28 +53,24 @@ function writeAiCache(vaultId: string, patch: Partial<AiCache>) {
   }
 }
 
-/** source 文本 → (颜色, 中文标签)。heuristic/cached 灰色，ai 蓝色亮显 */
-function sourceTag(source: string): { color: string; label: string } {
+/** source 文本 → (source key, 中文标签)。用于 pill 角标区分来源（AI / 本地推断 / 上次结果）*/
+function sourceTag(source: string): { source: string; label: string } {
   switch (source) {
     case "ai":
-      return { color: "blue", label: "AI" };
+      return { source: "ai", label: "AI" };
     case "heuristic":
-      return { color: "default", label: "本地推断" };
+      return { source: "heuristic", label: "本地推断" };
     case "cached":
-      return { color: "default", label: "上次结果" };
+      return { source: "cached", label: "上次结果" };
     default:
-      return { color: "default", label: source };
+      return { source: "other", label: source };
   }
 }
 
-/** 主线判定 source 标签映射后的可显示标签（project_name 在前） */
+/** 来源 pill 角标（替代 antd Tag，更精致；圆点色区分 AI / 本地 / 缓存）*/
 function MainlineTag({ source }: { source: string }) {
   const t = sourceTag(source);
-  return (
-    <Tag color={t.color} style={{ margin: 0 }}>
-      {t.label}
-    </Tag>
-  );
+  return <span className={`ai-source-pill source-${t.source}`}>{t.label}</span>;
 }
 
 export interface AiCoachCardProps {
@@ -188,6 +184,7 @@ export default function AiCoachCard({
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       {/* 主线判定卡 */}
       <Card
+        className="ai-coach-card"
         size="small"
         title={
           <Space>
@@ -228,6 +225,7 @@ export default function AiCoachCard({
 
       {/* 每日教练建议卡 */}
       <Card
+        className="ai-coach-card"
         size="small"
         title={
           <Space>
@@ -261,6 +259,7 @@ export default function AiCoachCard({
 
       {/* 明日一句卡 */}
       <Card
+        className="ai-coach-card"
         size="small"
         title={
           <Space>

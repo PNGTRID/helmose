@@ -1,9 +1,10 @@
 // 标签页状态（Obsidian 式多 tab）：tabs + 激活 + 面板折叠 + active note 共享数据
 
 import { create } from 'zustand';
+import { pushRecent } from '../utils/recentlyOpened';
 import type { Backlink } from '../types';
 
-export type TabType = 'note' | 'graph' | 'today' | 'tasks' | 'settings' | 'projects' | 'calendar' | 'journal' | 'planner';
+export type TabType = 'note' | 'graph' | 'today' | 'settings' | 'projects' | 'calendar' | 'journal' | 'planner';
 
 export interface Tab {
   id: string;
@@ -34,6 +35,8 @@ interface TabsState {
   closeOthers: (keepId: string) => void;
   closeToRight: (id: string) => void;
   closeAll: () => void;
+  /** 拖拽重排：把 fromId tab 移到 toId 位置（TabBar 拖拽用）*/
+  moveTab: (fromId: string, toId: string) => void;
   activate: (id: string) => void;
   toggleFile: () => void;
   toggleSide: () => void;
@@ -53,6 +56,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   openNote: (n) => {
     const id = `note:${n.id}`;
     const tabs = get().tabs;
+    // 记录最近打开（FilePanel 顶部「最近打开」区消费；纯前端 localStorage，跨会话保留）
+    pushRecent({ id: n.id, title: n.title ?? n.file_name, rel_path: n.rel_path, file_name: n.file_name });
     if (tabs.find((t) => t.id === id)) {
       set({ activeId: id });
       return;
@@ -102,6 +107,18 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     }),
 
   closeAll: () => set({ tabs: [], activeId: null }),
+
+  // 拖拽重排：把 fromId tab 移到 toId 位置（splice 移除再插入，保持其他顺序不变）
+  moveTab: (fromId, toId) =>
+    set((s) => {
+      const fromIdx = s.tabs.findIndex((t) => t.id === fromId);
+      const toIdx = s.tabs.findIndex((t) => t.id === toId);
+      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return s;
+      const tabs = [...s.tabs];
+      const [moved] = tabs.splice(fromIdx, 1);
+      tabs.splice(toIdx, 0, moved);
+      return { tabs };
+    }),
 
   activate: (id) => set({ activeId: id }),
   toggleFile: () => set((s) => ({ filePanelOpen: !s.filePanelOpen })),

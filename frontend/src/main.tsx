@@ -10,7 +10,9 @@ import "./theme/icons/anchor"; // 注册品牌锚形 SVG（覆盖 AppIcon 内置
 import "./index.css";
 
 // 主题外壳：订阅 theme store，antd 算法 + token 随主题切换。
-// token 经 tokens.ts 单一来源（大海蓝主题）；当前不开 cssVar（待 canvas 取色修复后阶段二启用）。
+// token 经 tokens.ts 单一来源（大海蓝主题）。cssVar 已开启：前置（canvas 取色直读 tokens hex）
+// 已满足——ForceGraph 唯一 canvas 取色点已改读 tokens.color.accent（见 components/ForceGraph.tsx），
+// 其余 var(--ob-*) 全走浏览器渲染路径，cssVar 模式下 token 转 CSS 变量字符串不影响这些点。
 function ThemeShell({ children }: { children: React.ReactNode }) {
   const theme = useThemeStore((s) => s.theme);
   const isDark = theme === "dark";
@@ -19,6 +21,9 @@ function ThemeShell({ children }: { children: React.ReactNode }) {
     <ConfigProvider
       locale={zhCN}
       theme={{
+        // 阶段四开启 cssVar：antd token 转 CSS 变量，主题切换零重渲染（前置 canvas 取色已全部读 hex）。
+        // antd v6 cssVar 用对象形式（key 给 CSS 变量作用域分组，避免多实例冲突）。
+        cssVar: { key: "helmose" },
         algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
         token: {
           colorPrimary: c.accent,

@@ -1,0 +1,43 @@
+/* AI 教练卡统一视觉语言（舵手叙事 + 克制→鲜明反差动效）
+   三卡（主线判定 / 每日教练 / 明日一句）共享：
+   - 左 3px 主色边框 + 靛蓝渐变底（区别于普通卡片，自然有"AI 高级感"，无需 Pro 角标）
+   - mount 入场动效（克制→鲜明反差，强化 AI 产出的"鲜活"感知）
+   来源用 pill 角标（小圆点 + 文字）替代 antd Tag，强化"AI 可追溯"信任。 */
+
+.ai-coach-card.ant-card {
+  border-left: 3px solid var(--ob-accent);
+  background: linear-gradient(135deg, var(--ob-accent-mod) 0%, var(--ob-bg) 55%);
+  animation: ob-slide-up 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 来源 pill 角标（替代 antd Tag）*/
+.ai-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  line-height: 18px;
+  background: var(--ob-bg-mod);
+  color: var(--ob-text-muted);
+  margin: 0;
+}
+.ai-source-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ob-text-faint);
+  flex-shrink: 0;
+}
+/* AI 来源：主色亮显（舵手靛蓝）；heuristic 默认灰点；cached 蓝点 */
+.ai-source-pill.source-ai::before {
+  background: var(--ob-accent);
+}
+.ai-source-pill.source-ai {
+  color: var(--ob-accent);
+}
+.ai-source-pill.source-cached::before {
+  background: #2563eb;
+}

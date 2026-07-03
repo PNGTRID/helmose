@@ -9,7 +9,8 @@
 //   拖入高紧急象限会调 setTaskUrgency 写 🔥 固化（design 边界）。
 import "./MatrixView.css";
 import { useMemo, useState } from "react";
-import { Typography, Empty } from "antd";
+import { Typography } from "antd";
+import EmptyState from "../EmptyState";
 import { App } from "antd";
 import {
   DndContext,
@@ -175,7 +176,7 @@ export default function MatrixView({
   };
 
   if (tasks.length === 0) {
-    return <Empty description="暂无任务" />;
+    return <EmptyState icon="task" title="暂无任务" compact />;
   }
 
   return (

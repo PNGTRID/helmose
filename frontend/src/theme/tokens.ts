@@ -7,10 +7,10 @@
 
 export const tokens = {
   color: {
-    // 主色 · 大海蓝（舵手叙事；替换原紫色 #7c3aed）
-    accent: "#0369A1", // sky-700 海洋青蓝，浅色主色
-    accentHover: "#075985", // sky-800 悬浮加深
-    accentMod: "#E0F2FE", // sky-100 主色淡底（选中行 / 聚焦 ring 背景 / Tag 默认底）
+    // 主色 · 去饱和靛蓝（舵手叙事；对标 Linear 低饱和高级感，脱离 AI 亮蓝）
+    accent: "#4A6FA5", // 去饱和钢蓝，浅色主色
+    accentHover: "#385582", // 悬浮加深
+    accentMod: "#EAEFF7", // 主色淡底（选中行 / 聚焦 ring 背景 / Tag 默认底）
 
     // 背景
     bg: "#FFFFFF",
@@ -67,9 +67,9 @@ export const tokens = {
 // 暗色 token（独立调过，非简单反色；主色提亮 sky-400，正文非纯白避免刺眼）
 export const darkTokens = {
   color: {
-    accent: "#38BDF8", // sky-400 深色主色提亮
-    accentHover: "#7DD3FC", // sky-300
-    accentMod: "#082F49", // sky-950 深色主色淡底
+    accent: "#7C9AC4", // 深色主色提亮（去饱和浅靛蓝，深底可读）
+    accentHover: "#9DB1D4", // 悬浮
+    accentMod: "#122236", // 深色主色淡底
 
     bg: "#1E1E1E",
     bgMod: "#252526",

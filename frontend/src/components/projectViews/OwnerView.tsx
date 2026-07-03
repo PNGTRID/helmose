@@ -1,7 +1,8 @@
 // 项目负责人视图：按 project.owner 分组（无 owner 归「未分配」），每组用 GridView 形态展示。
 // 分组纯前端 useMemo（数据源由父组件传入），不重复 IPC。
 import { useMemo } from "react";
-import { Empty, Typography } from "antd";
+import { Typography } from "antd";
+import EmptyState from "../EmptyState";
 import GridView from "./GridView";
 import type { Project } from "../../types";
 
@@ -33,7 +34,7 @@ export default function OwnerView({ projects, onOpen }: Props) {
   }, [projects]);
 
   if (projects.length === 0) {
-    return <Empty description="暂无项目" />;
+    return <EmptyState icon="project" title="暂无项目" compact />;
   }
 
   return (

@@ -57,15 +57,6 @@ export default function Ribbon() {
           <span className="ob-ribbon-label">今日</span>
         </button>
       </Tooltip>
-      <Tooltip title="任务" placement="right" mouseEnterDelay={0.3}>
-        <button
-          className={`ob-ribbon-btn ${isActiveView("tasks") ? "active" : ""}`}
-          onClick={() => openView("tasks", "任务")}
-        >
-          <AppIcon name="task" />
-          <span className="ob-ribbon-label">任务</span>
-        </button>
-      </Tooltip>
       <Tooltip title="今日计划（四象限）" placement="right" mouseEnterDelay={0.3}>
         <button
           className={`ob-ribbon-btn ${isActiveView("planner") ? "active" : ""}`}

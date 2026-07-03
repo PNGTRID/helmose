@@ -9,10 +9,10 @@
    Helmose 设计 Token（裁决版）—— 浅色
    ============================================================ */
 :root {
-  /* 主色 · 大海蓝（舵手叙事）*/
-  --primary: #0369A1;
-  --primary-hover: #075985;
-  --primary-bg: #E0F2FE;
+  /* 主色 · 去饱和靛蓝（舵手叙事；对标 Linear 低饱和高级感，脱离 AI 亮蓝）*/
+  --primary: #4a6fa5;
+  --primary-hover: #385582;
+  --primary-bg: #eaeff7;
 
   /* 背景 */
   --app-bg: #FAFAFA;
@@ -63,9 +63,9 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* AI 卡渐变（浅色：海蓝雾）*/
-  --ai-grad: linear-gradient(135deg, #F0F9FF 0%, #E0F2FE 60%, #FFFFFF 100%);
-  --ai-glow: rgba(3, 105, 161, 0.10);
+  /* AI 卡渐变（浅色：靛蓝雾）*/
+  --ai-grad: linear-gradient(135deg, #eaeff7 0%, #f3f6fb 60%, #FFFFFF 100%);
+  --ai-glow: rgba(74, 111, 165, 0.10);
 
   color-scheme: light;
 }
@@ -74,9 +74,9 @@
    深色主题（独立调过，非简单反色）
    ============================================================ */
 html.dark {
-  --primary: #38BDF8;
-  --primary-hover: #7DD3FC;
-  --primary-bg: #082F49;
+  --primary: #7c9ac4;
+  --primary-hover: #9db1d4;
+  --primary-bg: #122236;
 
   --app-bg: #1A1A1E;
   --surface: #1F1F24;
@@ -106,12 +106,14 @@ html.dark {
   --e3: 0 4px 12px rgba(0,0,0,0.40), 0 2px 4px rgba(0,0,0,0.24);
   --e4: 0 12px 32px rgba(0,0,0,0.50), 0 4px 12px rgba(0,0,0,0.32);
 
-  /* AI 卡渐变（深色：深海蓝，与主色同色系）*/
-  --ai-grad: linear-gradient(135deg, #0C4A6E 0%, #082F49 100%);
-  --ai-glow: rgba(56, 189, 248, 0.22);
+  /* AI 卡渐变（深色：深靛蓝，与主色同色系）*/
+  --ai-grad: linear-gradient(135deg, #122236 0%, #1f3556 100%);
+  --ai-glow: rgba(124, 154, 196, 0.22);
 
   color-scheme: dark;
 }
+
+/* 配色方案切换器已移除（靛蓝 #4A6FA5 定为最终主色，与 tokens.ts 一致）*/
 
 /* ============================================================
    基础 reset
@@ -768,7 +770,7 @@ svg { display: inline-block; vertical-align: middle; }
       </svg>
       <h1>Helmose · UI 组件打样</h1>
     </div>
-    <span class="meta">主色 #0369A1 · 大海蓝（舵手叙事）· antd v6 · 双主题</span>
+    <span class="meta">主色 #4A6FA5 · 去饱和靛蓝（舵手叙事）· antd v6 · 双主题</span>
     <div class="spacer"></div>
     <button class="theme-toggle" id="themeToggle">
       <svg id="themeIcon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -781,13 +783,13 @@ svg { display: inline-block; vertical-align: middle; }
   <!-- ============ Block 1 · Token 速览 ============ -->
   <section class="block">
     <div class="block-title">设计 Token 速览</div>
-    <div class="block-hint">所有色值经 CSS 变量引用，单一来源。主色海蓝 #0369A1 / 深色 #38BDF8（舵手叙事），四象限 Q2 改青色 #0891B2 避免与主色冲突。</div>
+    <div class="block-hint">所有色值经 CSS 变量引用，单一来源。主色去饱和靛蓝 #4A6FA5 / 深色 #7C9AC4（舵手叙事，对标 Linear 低饱和高级感），四象限 Q2 改青色 #0891B2 避免与主色冲突。</div>
 
     <div class="token-row">
       <div class="swatch">
         <div class="swatch-chip" style="background: var(--primary)"></div>
-        <div class="swatch-name">主色 海蓝</div>
-        <div class="swatch-val">#0369A1</div>
+        <div class="swatch-name">主色 去饱和靛蓝</div>
+        <div class="swatch-val">#4A6FA5</div>
       </div>
       <div class="swatch">
         <div class="swatch-chip" style="background: var(--primary-bg)"></div>

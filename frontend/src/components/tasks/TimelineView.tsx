@@ -4,7 +4,8 @@
 // 仿兄弟组件（ListView/KanbanView/MatrixView）props 模式：tasks + urgencyMap + noteById + onOpen + onToggle。
 import "./TimelineView.css";
 import { useMemo } from "react";
-import { Badge, Empty, Tag, Tooltip, Typography } from "antd";
+import { Badge, Tag, Tooltip, Typography } from "antd";
+import EmptyState from "../EmptyState";
 import dayjs from "dayjs";
 import type { Task, NoteMeta } from "../../types";
 import TaskCard from "./TaskCard";
@@ -81,7 +82,7 @@ export default function TimelineView({
   }, [tasks]);
 
   if (tasks.length === 0) {
-    return <Empty description="暂无任务" />;
+    return <EmptyState icon="task" title="暂无任务" compact />;
   }
 
   return (

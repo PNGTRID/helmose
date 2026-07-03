@@ -123,6 +123,9 @@ export function groupTasksByPriority(tasks: Task[]): TaskGroup[] {
 /** 四象限 key（艾森豪威尔矩阵） */
 export type Quadrant = "q1" | "q2" | "q3" | "q4";
 
+/** 拖拽落点：四象限 or 收集箱（GTD 温和版：拖回收集箱 = 清 priority+urgency 回未排程） */
+export type DropTarget = Quadrant | "inbox";
+
 /** 判定任务象限：重要 = priority>=2；紧急 = effUrgency==='high' */
 export function classifyQuadrant(task: Task, effUrgency: "high" | "mid" | "low"): Quadrant {
   const important = task.priority >= 2;
@@ -156,4 +159,19 @@ export function computeUrgencyMap(tasks: Task[]): Map<string, "high" | "mid" | "
     m.set(t.id, effectiveUrgency(t));
   }
   return m;
+}
+
+/** 收集箱谓词（GTD 温和版口径，与 effectiveUrgency 同源）：完全未表态的顶层任务。
+ *  priority=0 AND urgency=""（未设）AND due_date 为空。
+ *  - 已被排程（priority/urgency/due 任一有标记）的任务留象限，不进收集箱。
+ *  - 温和版意图：仅「完全没表态」的进收集箱等用户主动排程，存量破坏小、零迁移自然时间分界。
+ *  注：urgency 三态化（commit e5e91c5）后 mid 仅前端 due_date 派生产物、永不入库，
+ *      故此处用空串 "" 判「未设」（区别于显式 "low"）。 */
+export function isInbox(task: Task): boolean {
+  return (
+    task.parent_task_id == null &&
+    task.priority === 0 &&
+    task.urgency === "" &&
+    !task.due_date
+  );
 }

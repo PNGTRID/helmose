@@ -28,13 +28,13 @@ body,
   --ob-text: #333333;
   --ob-text-muted: #6b7280;
   --ob-text-faint: #9ca3af;
-  --ob-accent: #0369a1;
-  --ob-accent-hover: #075985;
-  --ob-accent-mod: #e0f2fe;
+  --ob-accent: #4a6fa5;
+  --ob-accent-hover: #385582;
+  --ob-accent-mod: #eaeff7;
   --ob-tab-active-bg: #ffffff;
   --ob-tab-bg: #f0f0f2;
   --ob-radius: 6px;
-  --ob-ring-focus: 0 0 0 2px rgba(3, 105, 161, 0.15);
+  --ob-ring-focus: 0 0 0 2px rgba(74, 111, 165, 0.18);
 }
 
 /* 暗色模式：html.dark 覆盖 --ob-* 变量（由 stores/theme.ts 切换 class）。
@@ -49,12 +49,12 @@ html.dark {
   --ob-text: #d4d4d4;
   --ob-text-muted: #9ca3af;
   --ob-text-faint: #6b7280;
-  --ob-accent: #38bdf8;
-  --ob-accent-hover: #7dd3fc;
-  --ob-accent-mod: #082f49;
+  --ob-accent: #7c9ac4;
+  --ob-accent-hover: #9db1d4;
+  --ob-accent-mod: #122236;
   --ob-tab-active-bg: #1e1e1e;
   --ob-tab-bg: #2a2a2c;
-  --ob-ring-focus: 0 0 0 2px rgba(56, 189, 248, 0.25);
+  --ob-ring-focus: 0 0 0 2px rgba(124, 154, 196, 0.25);
 }
 
 body {

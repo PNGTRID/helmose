@@ -29,7 +29,7 @@ interface Item {
 
 const PAGES: { type: TabType; title: string; icon: ReactNode }[] = [
   { type: "today", title: "今日聚焦", icon: <CompassOutlined /> },
-  { type: "tasks", title: "任务", icon: <CheckSquareOutlined /> },
+  { type: "planner", title: "今日计划", icon: <CheckSquareOutlined /> },
   { type: "projects", title: "项目", icon: <ProjectOutlined /> },
   { type: "calendar", title: "日历", icon: <CalendarOutlined /> },
   { type: "graph", title: "关系图谱", icon: <ApartmentOutlined /> },

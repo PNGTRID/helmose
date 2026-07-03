@@ -23,7 +23,7 @@
 }
 .ob-panel-body {
   flex: 1;
-  overflow: auto;
+  overflow: hidden; /* Tree virtual 内部滚动主导，避免外层 + Tree 双滚动条 */
   padding: 6px;
 }
 
@@ -74,4 +74,60 @@
   overflow: hidden;
   min-width: 0;
   font-weight: 600;
+}
+
+/* 最近打开区（FilePanel 搜索框下方，非搜索时显示；防 id 漂移见 FilePanel.tsx）*/
+.ob-recent {
+  padding: 0 6px 6px;
+  border-bottom: 1px solid var(--ob-border);
+}
+.ob-recent-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ob-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 4px 4px 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.ob-recent-title:hover {
+  color: var(--ob-text-muted);
+}
+.ob-recent-title .anticon {
+  transition: transform 0.2s;
+  font-size: 10px;
+}
+.ob-recent-title.expanded .anticon {
+  transform: rotate(90deg);
+}
+.ob-recent-count {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ob-accent);
+  background: var(--ob-accent-mod);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 14px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.ob-recent-list {
+  padding-bottom: 2px;
+}
+.ob-search-results {
+  height: 100%;
+  overflow: auto;
+}
+.ob-recent .ob-file-item {
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ob-recent .ob-file-item:hover {
+  background: var(--ob-bg-mod-hover);
 }

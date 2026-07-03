@@ -3,7 +3,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getMarkingStyle } from '../stores/markingStyle';
-import type { AgentExport, AiCoachResult, AiMainline, AiSettings, AiTomorrowResult, Backlink, BackupInfo, Event, GraphData, IndexStats, MoveResult, Note, NoteContent, NoteMeta, Okr, Project, ProjectProgress, RefLoc, Reminder, ScaffoldStats, SearchResult, TagCount, Task, UpdateStatus, Vault, VaultInput } from '../types';
+import type { AgentExport, AiCoachResult, AiMainline, AiSettings, AiTomorrowResult, Backlink, BackupInfo, Event, GraphData, IndexStats, MigratePlan, MigratePreview, MoveResult, Note, NoteContent, NoteMeta, Okr, Project, ProjectProgress, RefLoc, Reminder, ScaffoldStats, SearchResult, TagCount, Task, UpdateStatus, Vault, VaultInput } from '../types';
 
 export async function ping(): Promise<string> {
   return invoke<string>('ping');
@@ -458,6 +458,20 @@ export async function applyRefUpdates(
   refLocations: RefLoc[]
 ): Promise<number> {
   return invoke<number>('apply_ref_updates', { refLocations });
+}
+
+/** 删除笔记（移到 vault/.trash/ 可恢复 + 从索引移除）。返回 .trash 内相对路径。 */
+export async function moveNoteToTrash(noteId: string): Promise<string> {
+  return invoke<string>('move_to_trash', { noteId });
+}
+
+/** 批量迁移任务标记（GTD 存量固化，碰 vault 原文）。dryRun=true 只预览不写盘；false 经 save 收口（备份+重索引）。 */
+export async function migrateTaskMarks(
+  plans: MigratePlan[],
+  markingStyle: string,
+  dryRun: boolean
+): Promise<MigratePreview> {
+  return invoke<MigratePreview>('migrate_task_markers', { plans, markingStyle, dryRun });
 }
 
 // ============================================================

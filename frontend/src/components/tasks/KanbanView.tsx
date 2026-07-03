@@ -4,7 +4,8 @@
 // source_line==null 的卡片禁用拖拽（TaskCard 内部已处理，加 tooltip）。
 import "./KanbanView.css";
 import { useMemo, useState } from "react";
-import { Tag, Typography, Empty } from "antd";
+import { Tag, Typography } from "antd";
+import EmptyState from "../EmptyState";
 import { App } from "antd";
 import {
   DndContext,
@@ -149,7 +150,7 @@ export default function KanbanView({
   };
 
   if (tasks.length === 0) {
-    return <Empty description="暂无任务" />;
+    return <EmptyState icon="task" title="暂无任务" compact />;
   }
 
   return (

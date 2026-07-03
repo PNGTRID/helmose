@@ -345,26 +345,36 @@ registerIcon("anchor", (
 ### 7.1 思路
 把"收集箱"从只读计数卡升级为真正的 GTD 收件箱：新捕获的任务默认**未排程**（不进任何象限），用户必须主动拖入象限才算"排程"。解决当前"新任务默认进 q3 带🔥"导致用户从不排程的问题。
 
-### 7.2 数据口径
-**收集箱任务定义**：`priority IS NULL/0 AND urgency = mid（未手动标记）AND parent_task_id IS NULL`
+### 7.2 数据口径（阶段四实现版，已校准 urgency 三态化）
 
-**象限映射**（拖拽落位时通过 `set_task_priority` + `set_task_urgency` 写回，复用 M3 已实现命令，零后端改动）：
+> ⚠️ **口径校准**：commit `e5e91c5 urgency 三态化` 后 `mid` 永不入库（DB 只有 `""`/`high`/`low`，
+> `validate_task_urgency` 显式拒 mid）。原方案的 `urgency = mid` 查询恒为空，已废弃。下方为实际落地口径。
+
+**收集箱任务定义（温和版）**：`priority = 0 AND urgency = ""（未设）AND due_date IS NULL AND parent_task_id IS NULL`
+- 仅「完全未表态」的任务进收集箱；已被排程（priority/urgency/due 任一有标记）的留象限。
+- 派生单一源：`frontend/src/utils/taskGrouping.ts::isInbox`（与 `effectiveUrgency`/`classifyQuadrant` 同源）。
+- 与 `stores/plannerCategories` 的分类收集箱（`SYS_INBOX`，project/dir/tag 匹配不上）是**不同概念**；
+  PlannerPage 左栏顶部的「未排程」区是 GTD 收集箱，下方分类列表的「收集箱」是分类筛选项。
+
+**象限映射**（拖拽落位经 `set_task_priority` + `set_task_urgency` 写回，复用 M3 命令零后端改动）：
 
 | 落位象限 | 写入 priority | 写入 urgency |
 |---|---|---|
-| q1 重要紧急 | high（3） | high |
-| q2 重要不紧急 | high（3） | low |
-| q3 紧急不重要 | low（1） | high |
-| q4 不重要不紧急 | low（1） | low |
-| 收集箱（拖回） | 0（清除） | mid（清除） |
+| q1 重要紧急 | 2 | high |
+| q2 重要不紧急 | 2 | low |
+| q3 紧急不重要 | 1 | high |
+| q4 不重要不紧急 | 1 | low |
+| 收集箱（拖回） | 0（清除） | ""（清除） |
 
-### 7.3 ⚠️ 存量迁移坑
-**问题**：现有 vault 里大量历史任务 priority/urgency 都是默认值（0/mid），按 7.2 口径会全部被算作收集箱任务，从四象限消失。
+> 注：important = priority≥2（故 q1/q2=2、q3/q4=1）；拖不紧急象限写 `urgency:low` 压制 due_date 派生 high（Blocker #1 方案 B）。
 
-**对策（三选一，推荐 a）**：
-- **a. 一次性存量标记**（推荐）：上线时跑一次迁移——对所有"已在四象限视图出现过的任务"补写 priority/urgency（按当前象限反推）。复用 `migrate_task_markers`（dry-run + 备份 + 用户手动触发）。**碰 vault 原文，强制 dry-run + 备份 + 全量回滚**。
-- **b. 时间分界**：只对"上线后新建"任务套用收集箱口径，老任务维持原状。零迁移风险，口径割裂。
-- **c. 双口径并存**：过渡期方案。
+### 7.3 存量迁移坑（阶段四实现：温和版口径 + 对策 a 存量迁移）
+
+**原问题**：历史任务 priority/urgency 默认值（0/`""`，e5e91c5 重索引后无标记 urgency 为空串）按收集箱口径会被算作未排程。
+
+**实际缓解（温和版口径）**：收集箱要求 `due_date IS NULL`——已被设过期限的任务（有 due）即使 priority/urgency 未表态也留象限（按 due 派生 urgency）。只有「无 due 且完全未表态」的存量任务会进收集箱，破坏面大幅收窄。
+
+**落地选择**：温和版口径 + 阶段四步骤 3 `migrate_task_markers` 存量迁移（对策 a）——把当前在四象限（effective 派生）但无显式标记的存量任务按当前象限反写显式 priority/urgency，**冻结存量现状**。净效果：存量不破坏、仅新建任务走 GTD 收集箱。迁移强制 dry-run + `.helmose/backup` 备份 + 用户手动触发（碰 vault 原文，三重保护）。
 
 ### 7.4 UI 改造（PlannerPage 左栏）
 - 收集箱区改可拖拽列表（`useDraggable({ id, data: { task, from: 'inbox' } })`）

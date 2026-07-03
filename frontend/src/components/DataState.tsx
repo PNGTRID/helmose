@@ -1,7 +1,8 @@
 // 统一 loading / error / empty / 数据 四态渲染，消除各列表页重复的三态条件分支。
 // 用法：<DataState loading error errorTitle empty emptyText>{数据}</DataState>
 import type { ReactNode } from "react";
-import { Alert, Empty, Spin } from "antd";
+import { Alert, Spin } from "antd";
+import EmptyState from "./EmptyState";
 
 interface DataStateProps {
   loading?: boolean;
@@ -31,7 +32,7 @@ export default function DataState({
     return <Alert type="error" showIcon message={errorTitle} description={error} />;
   }
   if (empty) {
-    return <Empty description={emptyText} />;
+    return <EmptyState icon="list" title={typeof emptyText === "string" ? emptyText : "暂无数据"} compact />;
   }
   return <>{children}</>;
 }

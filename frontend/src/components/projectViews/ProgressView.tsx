@@ -2,7 +2,8 @@
 // 进度数据用 project_id 关联项目（与 ProjectsPage projects 数据 join）。
 // 注意：当前 tasks.project_id 无写入路径（backlog），真实 vault 进度可能全部 0 —— 0 数据也要友好显示。
 import "./ProgressView.css";
-import { Badge, Empty, Progress, Row, Col, Tag, Typography } from "antd";
+import { Badge, Progress, Row, Col, Tag, Typography } from "antd";
+import EmptyState from "../EmptyState";
 import * as api from "../../api";
 import { useVaultStore } from "../../stores/vault";
 import { useEffect, useState } from "react";
@@ -48,11 +49,16 @@ export default function ProgressView({ projects, onOpen }: Props) {
   const hasAnyTask = progress.some((p) => p.total > 0);
   if (!loading && progress.length > 0 && !hasAnyTask) {
     return (
-      <Empty description="暂无任务关联（任务需带 #project:名称 标签才会聚合到项目进度）" />
+      <EmptyState
+        icon="project"
+        title="暂无任务关联"
+        description="任务需带 #project:名称 标签才会聚合到项目进度"
+        compact
+      />
     );
   }
   if (progress.length === 0 && !loading) {
-    return <Empty description="暂无项目进度数据" />;
+    return <EmptyState icon="project" title="暂无项目进度数据" compact />;
   }
 
   // 用 project_id 关联项目（取 status / note_id / 主线信息）

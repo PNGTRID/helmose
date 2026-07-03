@@ -17,7 +17,6 @@ import CommandPalette from "./components/CommandPalette";
 import GraphPage from "./pages/GraphPage";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { openOrCreateTodayNote } from "./utils/note";
-import TasksPage from "./pages/TasksPage";
 import PlannerPage from "./pages/PlannerPage";
 import AppIcon from "./components/AppIcon";
 import TodayPage from "./pages/TodayPage";
@@ -134,6 +133,27 @@ export default function App() {
           return;
         }
         s.toggleSide();
+      } else if (k >= "1" && k <= "9") {
+        // ⌘+1~8 切换视图（文件/搜索/图谱/今日/计划/项目/日历/日志）
+        e.preventDefault();
+        const idx = parseInt(k, 10);
+        (
+          [
+            () => s.toggleFile(),
+            () => s.setPalette(true),
+            () => s.openView("graph", "图谱"),
+            () => s.openView("today", "今日聚焦"),
+            () => s.openView("planner", "今日计划"),
+            () => s.openView("projects", "项目"),
+            () => s.openView("calendar", "日历"),
+            () => s.openView("journal", "日志"),
+          ] as Array<() => void>
+        )[idx - 1]?.();
+      } else if (k === "w") {
+        // ⌘+W 关闭当前标签页（Obsidian/IDE 习惯）
+        e.preventDefault();
+        const cur = s.tabs.find((t) => t.id === s.activeId);
+        if (cur) s.close(cur.id);
       } else if (k === "?") {
         // 帮助（避免在输入框内触发）
         const tag = (e.target as HTMLElement)?.tagName;
@@ -192,8 +212,6 @@ export default function App() {
         return <GraphPage />;
       case "today":
         return <TodayPage />;
-      case "tasks":
-        return <TasksPage />;
       case "planner":
         return <PlannerPage />;
       case "projects":
@@ -241,6 +259,8 @@ export default function App() {
           <kbd>⌘/Ctrl + J</kbd><span>今日笔记（打开或创建）</span>
           <kbd>⌘/Ctrl + B</kbd><span>切换文件面板</span>
           <kbd>⌘/Ctrl + \\</kbd><span>切换侧栏</span>
+          <kbd>⌘/Ctrl + 1~8</kbd><span>切换视图（文件/搜索/图谱/今日/计划/项目/日历/日志）</span>
+          <kbd>⌘/Ctrl + W</kbd><span>关闭当前标签页</span>
           <kbd>?</kbd><span>显示本帮助</span>
           <kbd>Esc</kbd><span>关闭弹窗</span>
         </div>

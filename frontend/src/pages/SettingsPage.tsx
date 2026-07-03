@@ -12,6 +12,7 @@ import {
   Segmented,
   Space,
   Switch,
+  Modal,
   Tag,
   Typography,
   message,
@@ -20,8 +21,9 @@ import { DeleteOutlined, ExportOutlined, ReloadOutlined, SaveOutlined, SyncOutli
 import AppIcon from "../components/AppIcon";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
-import type { AgentExport, AiSettings, BackupInfo, UpdateStatus } from "../types";
+import type { AgentExport, AiSettings, BackupInfo, MigratePlan, MigratePreview, UpdateStatus } from "../types";
 import { useMarkingStyleStore, type MarkingStyle } from "../stores/markingStyle";
+import { isInbox } from "../utils/taskGrouping";
 
 const { Text } = Typography;
 
@@ -43,8 +45,54 @@ export default function SettingsPage() {
   // —— 任务标记风格（helmose 文字 / obsidian emoji）——
   const markingStyle = useMarkingStyleStore((s) => s.style);
   const setMarkingStyle = useMarkingStyleStore((s) => s.setStyle);
+  // —— 存量任务迁移（GTD 固化：把 isInbox 存量任务显式标记，脱离温和版收集箱）——
+  const [migrating, setMigrating] = useState(false);
+  const [migratePreview, setMigratePreview] = useState<MigratePreview | null>(null);
 
   if (!vault) return null;
+
+  // 算迁移计划：温和版 isInbox 任务（priority=0 AND urgency="" AND due=null AND 顶层）→ 固化 priority=1
+  // （显式不重要，脱离收集箱的 priority=0 条件；urgency 不动保留 due 派生）。仅顶层可写（source_line 非空）。
+  const computeMigrationPlans = async (): Promise<MigratePlan[]> => {
+    const tasks = await api.getTasks(vault.id);
+    return tasks
+      .filter((t) => isInbox(t) && t.source_line != null)
+      .map((t) => ({
+        note_id: t.note_id,
+        source_line: t.source_line as number,
+        priority: 1,
+        urgency: "",
+      }));
+  };
+  const onMigrateDryRun = async () => {
+    setMigrating(true);
+    try {
+      const plans = await computeMigrationPlans();
+      if (plans.length === 0) {
+        message.info("没有需要迁移的任务（收集箱为空）");
+        return;
+      }
+      const preview = await api.migrateTaskMarks(plans, markingStyle, true);
+      setMigratePreview(preview);
+    } catch (e) {
+      message.error(`扫描失败：${e}`);
+    } finally {
+      setMigrating(false);
+    }
+  };
+  const onMigrateApply = async () => {
+    setMigrating(true);
+    try {
+      const plans = await computeMigrationPlans();
+      const result = await api.migrateTaskMarks(plans, markingStyle, false);
+      message.success(`已固化 ${result.note_count} 篇笔记的 ${result.item_count} 个任务（已备份到 .helmose/backup）`);
+      setMigratePreview(null);
+    } catch (e) {
+      message.error(`迁移失败：${e}`);
+    } finally {
+      setMigrating(false);
+    }
+  };
 
   const loadBackups = async () => {
     if (!vault) return;
@@ -200,8 +248,42 @@ export default function SettingsPage() {
             新建/编辑任务时写入 vault 的标记格式。Helmose 标准为独立文字契约（默认，对 Agent 更友好）；
             Obsidian 兼容对齐 Tasks 插件（双端互通）。存量任务不受影响（读侧三格式全兼容）。
           </Text>
+          <Button size="small" loading={migrating} onClick={onMigrateDryRun} style={{ alignSelf: "flex-start" }}>
+            固化存量任务（脱离收集箱）
+          </Button>
         </Space>
       </Card>
+
+      {/* 迁移预览/确认 Modal（dry-run 结果展示 + 用户授权才写盘；写盘前自动备份）*/}
+      <Modal
+        open={!!migratePreview}
+        title="固化存量任务"
+        onCancel={() => setMigratePreview(null)}
+        okText={`确认固化（${migratePreview?.item_count ?? 0} 个任务）`}
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+        confirmLoading={migrating}
+        onOk={onMigrateApply}
+      >
+        <div style={{ fontSize: 12, marginBottom: 8, color: "var(--ob-text-muted)" }}>
+          将为 <b>{migratePreview?.note_count ?? 0}</b> 篇笔记的 <b>{migratePreview?.item_count ?? 0}</b> 个收集箱任务补写
+          <code> priority:1 </code>标记（显式不重要），使其脱离收集箱留在四象限。
+          <b>写盘前已自动备份到 .helmose/backup</b>，可在下方「备份管理」回滚。
+        </div>
+        <List
+          size="small"
+          dataSource={migratePreview?.items ?? []}
+          renderItem={(it) => (
+            <List.Item style={{ padding: "4px 0" }}>
+              <div style={{ width: "100%", fontSize: 11 }}>
+                <div style={{ color: "var(--ob-text-faint)" }}>{it.rel_path}:{it.source_line}</div>
+                <div style={{ color: "var(--ob-text-faint)" }}>前：{it.before}</div>
+                <div>后：{it.after}</div>
+              </div>
+            </List.Item>
+          )}
+        />
+      </Modal>
 
       <Card title="当前 Vault">
         <Descriptions column={1} size="small">

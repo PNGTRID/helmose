@@ -3,7 +3,8 @@
 // 响应式断点：xs=24（1 列）/ sm=12（2 列）/ md=8（3 列）/ lg=6（4 列）。
 // 数据源由父组件 ProjectsPage 传入（内存切视图，不重复 IPC）。
 import "./GridView.css";
-import { Card, Col, Empty, Row, Tag, Typography } from "antd";
+import { Card, Col, Row, Tag, Typography } from "antd";
+import EmptyState from "../EmptyState";
 import { relativeTime } from "../../utils/date";
 import { priorityLabel, statusColor, statusLabel } from "./shared";
 import type { Project } from "../../types";
@@ -17,7 +18,7 @@ interface Props {
 
 export default function GridView({ projects, onOpen }: Props) {
   if (projects.length === 0) {
-    return <Empty description="暂无项目" />;
+    return <EmptyState icon="project" title="暂无项目" compact />;
   }
   return (
     <Row gutter={[16, 16]}>

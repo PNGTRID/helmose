@@ -122,7 +122,7 @@ export default function TodayPage() {
   // 逾期未完成（due_date < 今天）：醒目提醒，跳任务页处理
   const overdueTasks = tasks.filter((t) => t.due_date && t.due_date < today);
 
-  const goTo = (type: "tasks" | "calendar" | "projects", title: string) =>
+  const goTo = (type: "planner" | "calendar" | "projects", title: string) =>
     useTabsStore.getState().openView(type, title);
 
   // 打开或创建今日笔记（抽屉编辑，不跳 tab）
@@ -230,7 +230,7 @@ export default function TodayPage() {
               </Typography.Text>
             </span>
           }
-          onClick={() => goTo("tasks", "任务")}
+          onClick={() => goTo("planner", "今日计划")}
         />
       )}
 

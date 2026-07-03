@@ -316,3 +316,28 @@ export interface AiTomorrowResult {
   source: string;
   note_id: string;
 }
+
+/** 迁移计划项（migrate_task_markers 输入，前端算好目标 priority/urgency 传入；字段 snake_case 对齐后端） */
+export interface MigratePlan {
+  note_id: string;
+  source_line: number;
+  priority: number;
+  urgency: string;
+}
+
+/** 单条迁移预览（before/after 行文本，dry-run 展示） */
+export interface MigrateItem {
+  note_id: string;
+  rel_path: string;
+  source_line: number;
+  before: string;
+  after: string;
+}
+
+/** 迁移预览/结果（applied 区分是否写盘） */
+export interface MigratePreview {
+  note_count: number;
+  item_count: number;
+  items: MigrateItem[];
+  applied: boolean;
+}

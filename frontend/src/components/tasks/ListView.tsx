@@ -4,7 +4,8 @@
 // 可点展开（缩进显示）；子任务全完成时父任务卡片下方提示「可勾选完成父任务」。
 // 分组逻辑复用 utils/taskGrouping（单一源 + 可单测）；本组件只管 UI（Collapse + 卡片渲染）。
 import { useMemo, useState } from "react";
-import { Button, Segmented, Collapse, Typography, Empty } from "antd";
+import { Button, Segmented, Collapse, Typography } from "antd";
+import EmptyState from "../EmptyState";
 import type { Task, NoteMeta } from "../../types";
 import type { TaskGroupBy } from "../../stores/taskView";
 import {
@@ -107,7 +108,7 @@ export default function ListView({
     activeKeys === "all" ? groups.map((g) => g.label) : activeKeys;
 
   if (tasks.length === 0) {
-    return <Empty description="暂无任务" />;
+    return <EmptyState icon="task" title="暂无任务" compact />;
   }
 
   const toggleParent = (pid: string) => {

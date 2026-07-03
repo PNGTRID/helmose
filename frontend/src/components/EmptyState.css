@@ -1,0 +1,36 @@
+/* 品牌化空态：主色图标 + 标题 + 描述 + 行动，克制不抢戏 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px 16px;
+  gap: 6px;
+}
+.empty-state-compact {
+  padding: 16px 8px;
+}
+.empty-state-icon {
+  color: var(--ob-accent);
+  opacity: 0.5;
+  margin-bottom: 6px;
+  display: flex;
+}
+.empty-state-compact .empty-state-icon {
+  margin-bottom: 4px;
+}
+.empty-state-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ob-text);
+}
+.empty-state-desc {
+  font-size: 12px;
+  color: var(--ob-text-faint);
+  max-width: 320px;
+  line-height: 1.5;
+}
+.empty-state-action {
+  margin-top: 8px;
+}

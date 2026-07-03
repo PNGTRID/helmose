@@ -42,3 +42,25 @@
   opacity: 1;
   color: var(--ob-accent);
 }
+/* 拖拽中：半透明 + 提起 */
+.ob-tab.dragging {
+  opacity: 0.55;
+  z-index: 1;
+  cursor: grabbing;
+}
+/* 拖拽悬停目标：主色淡底高亮 */
+.ob-tab.drop-target {
+  background: var(--ob-accent-mod);
+  color: var(--ob-accent);
+}
+/* 横向溢出滚动条（细，Obsidian 风）*/
+.ob-tabbar::-webkit-scrollbar {
+  height: 4px;
+}
+.ob-tabbar::-webkit-scrollbar-thumb {
+  background: var(--ob-border-strong);
+  border-radius: 2px;
+}
+.ob-tabbar::-webkit-scrollbar-track {
+  background: transparent;
+}
