@@ -20,20 +20,18 @@
 //
 // 图标统一走 AppIcon（@ant-design/icons），UI 禁用 emoji；vault bullet 内的 emoji 标记是解析契约，不在本页管辖。
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Alert, App, Dropdown, Modal, Popconfirm } from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, App, Modal, Popconfirm } from "antd";
+import dayjs from "dayjs";
 import {
   DndContext,
   DragOverlay,
   PointerSensor,
   useSensor,
   useSensors,
-  useDraggable,
-  useDroppable,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import dayjs from "dayjs";
 import * as api from "../api";
 import { useVaultStore } from "../stores/vault";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
@@ -46,52 +44,23 @@ import {
   type PlannerCategory,
 } from "../stores/plannerCategories";
 import { genId } from "../utils/id";
-import { parseDesc, rebuildTaskLine } from "../utils/taskLine";
+import { rebuildTaskLine } from "../utils/taskLine";
 import { buildTaskBullet } from "../utils/quickAdd";
-import { classifyQuadrant, computeUrgencyMap, effectiveUrgency, type Quadrant } from "../utils/taskGrouping";
+import { classifyQuadrant, computeUrgencyMap, type DropTarget, type Quadrant } from "../utils/taskGrouping";
 import type { NoteMeta, Project, Task } from "../types";
 import AppIcon from "../components/AppIcon";
 import CategoryModal from "../components/CategoryModal";
+import QuickAddTaskModal from "../components/QuickAddTaskModal";
+// 阶段 3a/3b 拆分：常量 / 子组件（含 DetailPanel）抽到 components/planner/
+import { QUADS } from "../components/planner/constants";
+import MiniCalendar from "../components/planner/MiniCalendar";
+import QuadrantArea from "../components/planner/QuadrantArea";
+import DetailPanel from "../components/planner/DetailPanel";
+import { usePlannerTasksStore } from "../stores/plannerTasks";
 import "./PlannerPage.css";
 
-// ============================================================
-// 四象限定义（参考图配色 + 图标 + 装饰图，照搬预览）
-// ============================================================
-interface QuadDef {
-  key: Quadrant;
-  name: string;
-  icon: string; // AppIcon registry name（象限主图标）
-  sub: string;
-  tip: string;
-  decorIcon: string; // AppIcon registry name（右下大号装饰）
-  cls: string; // CSS 类名后缀（q1/q2/q3/q4）
-}
-const QUADS: Record<Quadrant, QuadDef> = {
-  q1: { key: "q1", name: "重要且紧急", icon: "fire", sub: "立即做", tip: "立即做", decorIcon: "fire", cls: "q1" },
-  q2: { key: "q2", name: "重要不紧急", icon: "bulb", sub: "规划后再做", tip: "计划做", decorIcon: "compass", cls: "q2" },
-  q3: { key: "q3", name: "紧急不重要", icon: "thunder", sub: "快做", tip: "快做", decorIcon: "clock", cls: "q3" },
-  q4: { key: "q4", name: "不重要不紧急", icon: "coffee", sub: "有空再做", tip: "有空做", decorIcon: "coffee", cls: "q4" },
-};
-// 参考图网格位置：左上 q3 / 右上 q1 / 左下 q4 / 右下 q2
-const QUAD_ORDER: Quadrant[] = ["q3", "q1", "q4", "q2"];
-
-const REPEAT_OPTIONS: Array<{ key: string; label: string }> = [
-  { key: "", label: "不重复" },
-  { key: "day", label: "每天" },
-  { key: "week", label: "每周" },
-  { key: "month", label: "每月" },
-];
-
-const todayStr = () => dayjs().format("YYYY-MM-DD");
-const tomorrowStr = () => dayjs().add(1, "day").format("YYYY-MM-DD");
-
+// 常量（QUADS/QUAD_ORDER/REPEAT_OPTIONS/todayStr/tomorrowStr/SelectAnchor）已抽到 components/planner/constants.ts。
 // parseDesc / rebuildTaskLine 已抽到 utils/taskLine.ts（纯函数可单测）。
-
-/** 选中锚点：vault 文件路径 + 1-based 去fm正文行号。两者跨写回稳定（id 漂移不影响）。 */
-interface SelectAnchor {
-  relPath: string;
-  sourceLine: number;
-}
 
 export default function PlannerPage() {
   const { message: msg } = App.useApp();
@@ -105,8 +74,12 @@ export default function PlannerPage() {
   const setActiveCat = usePlannerCategoryStore((s) => s.setActiveCat);
   const removeCategory = usePlannerCategoryStore((s) => s.removeCategory);
 
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [selectedAnchor, setSelectedAnchor] = useState<SelectAnchor | null>(null);
+  // 阶段 3b：tasks/selectedAnchor/writing/loadError 迁到 Zustand store（跨子组件共享，避开 props 链爆炸）。
+  // setter 签名与 useState 兼容（接受值或 (prev)=>next），下方写回回调内部代码零改动。
+  const tasks = usePlannerTasksStore((s) => s.tasks);
+  const setTasks = usePlannerTasksStore((s) => s.setTasks);
+  const selectedAnchor = usePlannerTasksStore((s) => s.selectedAnchor);
+  const setSelectedAnchor = usePlannerTasksStore((s) => s.setSelectedAnchor);
   // 响应式：监听 PlannerPage 自身宽度（= ob-content 宽，已扣 Ribbon/FilePanel），而非 window.innerWidth——
   // 后者会误判（FilePanel 占一大块，窗口够大但页面实际很窄，三栏挤没四象限）。
   // 三栏固定占 250+320+gap+padding ≈ 660，中栏四象限 2×2 至少 ~400 → 自身宽度 < 1000 切两栏 + 详情弹窗。
@@ -122,13 +95,19 @@ export default function PlannerPage() {
     return () => ro.disconnect();
   }, []);
   const [viewMonth, setViewMonth] = useState(() => dayjs());
+  // 日历选中日期（点击日期显示当日计划；区别于 pendingDate=输入条新任务日期）
+  const [selectedCalDate, setSelectedCalDate] = useState<string | null>(null);
   const [quickText, setQuickText] = useState("");
   // 输入条挂起的日期（日期选择器 / 迷你日历点日期预填），回车提交时带上
   const [pendingDate, setPendingDate] = useState<string | null>(null);
+  // 快速添加详情弹窗（输入条「配置」按钮打开，复用 QuickAddTaskModal 设日期/紧急/项目/重复/子任务）
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [catModalOpen, setCatModalOpen] = useState(false);
   const [editingCat, setEditingCat] = useState<PlannerCategory | null>(null); // CategoryModal 编辑目标（null=新建）
-  const [writing, setWriting] = useState(false);
-  const [loadError, setLoadError] = useState(false); // 首次加载失败标志（错误三态，High #8）
+  const writing = usePlannerTasksStore((s) => s.writing);
+  const setWriting = usePlannerTasksStore((s) => s.setWriting);
+  const loadError = usePlannerTasksStore((s) => s.loadError);
+  const setLoadError = usePlannerTasksStore((s) => s.setLoadError);
   const hasLoadedOnce = useRef(false); // 区分首次加载 vs 后续静默刷新
 
   const noteById = useMemo(() => {
@@ -243,9 +222,27 @@ export default function PlannerPage() {
     }
   };
 
-  // 象限拖拽 / 属性行改象限（三态写回，Blocker #1 方案 B 根治：manual low 可压制派生 high）
-  const onQuadChange = async (t: Task, target: Quadrant) => {
+  // 象限拖拽 / 属性行改象限 / 拖回收集箱（三态写回，Blocker #1 方案 B 根治：manual low 可压制派生 high）
+  const onQuadChange = async (t: Task, target: DropTarget) => {
     if (t.source_line == null || writing) return;
+    // 拖回收集箱：清 priority + urgency（due_date 不动；有 due 的任务因 isInbox 需 due 空才进收集箱）
+    if (target === "inbox") {
+      setTasks((prev) =>
+        prev.map((x) => (x.id === t.id ? { ...x, priority: 0, urgency: "" } : x))
+      );
+      setWriting(true);
+      try {
+        await api.setTaskPriority(t.note_id, t.source_line, 0);
+        await api.setTaskUrgency(t.note_id, t.source_line, "");
+        msg.success("已移回收集箱");
+      } catch (e) {
+        msg.error(`移回收集箱失败：${e}`);
+        refresh();
+      } finally {
+        setWriting(false);
+      }
+      return;
+    }
     const newPriority = target === "q1" || target === "q2" ? 2 : 1;
     const targetUrgency: "high" | "low" = target === "q1" || target === "q3" ? "high" : "low";
     // 三态后 urgency 字段与 effective 同口径：乐观同时覆盖 priority + urgency 不打架，象限立即正确无闪烁。
@@ -455,10 +452,13 @@ export default function PlannerPage() {
         true
       );
       // 从返回正文反查父任务行号（去 fm 正文 1-based，与 insertLineAfter afterLine 同口径）
+      // 加严：必须是以 `- [ ]`/`- [x]` 等 checkbox 开头的 bullet 行，且含任务文本——
+      // 裸 includes(t.text) 会把任务文本作为子串误匹配到标题/正文段落，定位错父行。
       const bodyLines = cur.raw_content.split("\n");
       let parentLine = -1;
       for (let i = bodyLines.length - 1; i >= 0; i--) {
-        if (bodyLines[i].includes(t.text)) {
+        const ln = bodyLines[i];
+        if (/^\s*-\s\[[ xX/]\]\s+/.test(ln) && ln.includes(t.text)) {
           parentLine = i + 1;
           break;
         }
@@ -483,12 +483,16 @@ export default function PlannerPage() {
   };
 
   // 底部输入条 / 日历点日期 → 新建任务到今日笔记「今日待办」section
-  // 乐观：临时顶层任务立即进 q3（默认紧急不重要：urgency=high），watcher refresh 后替换为真。
+  // 乐观：临时顶层任务立即进收集箱（温和版 GTD：新建不带 urgency → 完全未表态 → isInbox），
+  // watcher refresh 后替换为真。用户拖入象限或设 due 才算「排程」出收集箱。
   // bullet 经 buildTaskBullet 拼装（写侧唯一源，尊重全局 markingStyle）；已含 `- [ ]` 前缀 → asTask=false 避免双前缀。
   const quickAdd = async (text: string, due: string | null) => {
     if (!vault) return;
     const t = text.trim();
     if (!t) return;
+    // 默认当天 + 紧急（q3 紧急不重要：priority=0 + urgency=high + due=today，当天紧急任务显眼）。
+    // due 参数预留（输入条已去日期选择器，恒 null → 默认 today）。
+    const finalDue = due ?? dayjs().format("YYYY-MM-DD");
     const tempId = `temp-${genId()}`;
     const tempTask: Task = {
       id: tempId,
@@ -496,7 +500,7 @@ export default function PlannerPage() {
       vault_id: vault.id,
       text: t,
       done: false,
-      due_date: due,
+      due_date: finalDue,
       source: "checkbox",
       source_line: null,
       project_id: null,
@@ -504,7 +508,7 @@ export default function PlannerPage() {
       completed_at: null,
       status: "todo",
       priority: 0,
-      urgency: "high", // 默认 q3（紧急不重要）：新建带 🔥，左上象限显眼
+      urgency: "high", // 默认 q3（紧急不重要）：当天紧急任务显眼
       repeat_rule: null,
       parent_task_id: null,
     };
@@ -515,9 +519,9 @@ export default function PlannerPage() {
     try {
       const nc = await api.createTodayNote(vault.id);
       // 复用 buildTaskBullet（写侧唯一拼装源；旧代码硬编码 🔥/📅 绕过它，切 obsidian 风格后输出不一致）
-      const bullet = buildTaskBullet({ text: t, dueDate: due, urgency: "high" });
+      const bullet = buildTaskBullet({ text: t, dueDate: finalDue, urgency: "high" });
       await api.appendBullet(nc.id, "今日待办", bullet, false);
-      msg.success(due ? `已添加（期限 ${due}）` : "已添加");
+      msg.success("已添加到今日待办（紧急不重要）");
     } catch (e) {
       setTasks((prev) => prev.filter((x) => x.id !== tempId));
       msg.error(`添加失败：${e}`);
@@ -540,7 +544,7 @@ export default function PlannerPage() {
     return topLevelTasks.filter((t) => taskCat.get(t.id) === activeCat);
   }, [topLevelTasks, activeCat, taskCat]);
 
-  // 四象限分桶（仅顶层任务）
+  // 四象限分桶（仅顶层任务，按 effective urgency 分 q1-q4）
   const buckets = useMemo(() => {
     const out: Record<Quadrant, Task[]> = { q1: [], q2: [], q3: [], q4: [] };
     for (const t of filteredTop) {
@@ -550,6 +554,31 @@ export default function PlannerPage() {
     return out;
   }, [filteredTop, urgencyMap]);
 
+  // —— DnD 架构（阶段四 GTD）：DndContext 提升到本页顶层，包裹左栏收集箱 + 中栏四象限，
+  // 使收集箱↔象限可互拖。sensors / handleDragEnd / DragOverlay / activeTask 从原 QuadrantArea 提升。
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const draggingRef = useRef(false);
+  const onDragStart = (e: DragStartEvent) => {
+    draggingRef.current = true;
+    setActiveId(String(e.active.id));
+  };
+  const handleDragEnd = (e: DragEndEvent) => {
+    setActiveId(null);
+    const { active, over } = e;
+    if (over) {
+      const task = active.data.current?.task as Task | undefined;
+      // over.id 为象限 key（q1-q4）或 "inbox"，统一走 onQuadChange 写回（含拖回收集箱清标记）
+      if (task && task.source_line != null) void onQuadChange(task, over.id as DropTarget);
+    }
+    // 延迟一帧重置：让拖拽松手后的 click 先被 PlannerTaskCard 守卫挡掉（防误开详情）
+    setTimeout(() => {
+      draggingRef.current = false;
+    }, 0);
+  };
+  // 拖拽中的任务（DragOverlay 克隆用）：从全部任务找 activeId（收集箱 + 象限任一处）
+  const activeTask = activeId ? tasks.find((t) => t.id === activeId) ?? null : null;
+
   if (!vault) return null;
 
   // 详情面板 JSX（宽屏右栏 / 窄屏弹窗共用，避免重复写一长串 props）
@@ -558,11 +587,8 @@ export default function PlannerPage() {
       task={selected}
       categories={categories}
       taskCat={taskCat}
-      childTasks={selected ? tasks.filter((t) => t.parent_task_id === selected.id) : []}
-      projectName={
-        selected?.project_id ? projectById.get(selected.project_id)?.name ?? null : null
-      }
       projectById={projectById}
+      noteById={noteById}
       onClose={() => setSelectedAnchor(null)}
       onToggle={onToggle}
       onQuadChange={onQuadChange}
@@ -577,23 +603,14 @@ export default function PlannerPage() {
   );
 
   return (
+    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={handleDragEnd}>
     <div
       className="planner-page"
       ref={rootRef}
       style={isNarrow ? { gridTemplateColumns: "200px 1fr" } : undefined}
     >
-      {/* ============ 左栏：收集箱 → 分类 → 迷你日历 ============ */}
+      {/* ============ 左栏：任务分类 → 迷你日历 ============ */}
       <aside className="planner-col planner-left">
-        <div className="planner-inbox">
-          <div className="planner-inbox-row">
-            <div className="planner-inbox-title">
-              <AppIcon name="inbox" size={14} /> 收集箱
-            </div>
-            <div className="planner-inbox-count">{inboxCount}</div>
-          </div>
-          <div className="planner-inbox-foot">未归类临时任务</div>
-        </div>
-
         <div className="planner-panel">
           <div className="planner-panel-title">
             <AppIcon name="apps" size={13} /> 任务分类
@@ -678,9 +695,33 @@ export default function PlannerPage() {
           onPrev={() => setViewMonth(viewMonth.subtract(1, "month"))}
           onNext={() => setViewMonth(viewMonth.add(1, "month"))}
           dueDateSet={dueDateSet}
-          selectedDue={selected?.due_date ?? null}
-          onPickDate={(d) => setPendingDate(d)}
+          selectedDue={selectedCalDate}
+          onPickDate={setSelectedCalDate}
         />
+        {/* 当日计划：点击日期后显示该日 due 的任务（紧凑列表 + 象限色点，点击选中进详情）*/}
+        {selectedCalDate && (
+          <div className="planner-cal-tasks">
+            <div className="planner-cal-tasks-head">
+              <span>{selectedCalDate} 的计划</span>
+              <button className="planner-cal-tasks-close" title="关闭" onClick={() => setSelectedCalDate(null)}>
+                <AppIcon name="close" size={10} />
+              </button>
+            </div>
+            {(() => {
+              const dayTasks = topLevelTasks.filter((t) => t.due_date === selectedCalDate);
+              if (dayTasks.length === 0) return <div className="planner-empty-tip">当日无计划</div>;
+              return dayTasks.map((t) => {
+                const q = classifyQuadrant(t, urgencyMap.get(t.id) ?? "low");
+                return (
+                  <div key={t.id} className="planner-cal-task" onClick={() => onSelect(t.id)}>
+                    <span className={`planner-cal-task-dot ${q}`} />
+                    <span className={`planner-cal-task-text ${t.done ? "done" : ""}`}>{t.text}</span>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        )}
       </aside>
 
       {/* ============ 中栏：四象限 + 底部输入条 ============ */}
@@ -704,10 +745,10 @@ export default function PlannerPage() {
           selectedId={selected?.id ?? null}
           onSelect={onSelect}
           onToggle={onToggle}
-          onDragEnd={onQuadChange}
           taskCat={taskCat}
           categories={categories}
           childCountByTask={childCountByTask}
+          draggingRef={draggingRef}
         />
         <div className="planner-quickadd">
           <button
@@ -719,11 +760,7 @@ export default function PlannerPage() {
           </button>
           <input
             className="planner-qa-input"
-            placeholder={
-              pendingDate
-                ? `添加计划（期限 ${pendingDate}），回车保存`
-                : "添加计划到「收集箱」，回车即可保存"
-            }
+            placeholder="添加今日计划（紧急不重要），回车保存"
             value={quickText}
             onChange={(e) => setQuickText(e.target.value)}
             onKeyDown={(e) => {
@@ -731,25 +768,13 @@ export default function PlannerPage() {
             }}
           />
           <div className="planner-qa-tools">
-            <span className="planner-qa-tool" title="灵感">
-              <AppIcon name="bulb" size={14} />
-            </span>
-            <input
-              className="planner-qa-date"
-              type="date"
-              title="选日期"
-              value={pendingDate ?? ""}
-              onChange={(e) => setPendingDate(e.target.value || null)}
-            />
-            {pendingDate && (
-              <button
-                className="planner-qa-clear"
-                onClick={() => setPendingDate(null)}
-                title="清除日期"
-              >
-                <AppIcon name="close" size={10} />
-              </button>
-            )}
+            <button
+              className="planner-qa-tool"
+              title="详情配置（日期/紧急/项目/重复）"
+              onClick={() => setQuickAddOpen(true)}
+            >
+              <AppIcon name="setting" size={14} />
+            </button>
           </div>
         </div>
       </section>
@@ -771,6 +796,7 @@ export default function PlannerPage() {
         </Modal>
       )}
 
+      <QuickAddTaskModal open={quickAddOpen} onCancel={() => setQuickAddOpen(false)} />
       <CategoryModal
         open={catModalOpen}
         editing={editingCat}
@@ -780,79 +806,8 @@ export default function PlannerPage() {
         }}
       />
     </div>
-  );
-}
-
-// ============================================================
-// 四象限区（DnD + 4 桶，视觉照搬预览：左上q3/右上q1/左下q4/右下q2 + 右下装饰大图标）
-// ============================================================
-function QuadrantArea({
-  buckets,
-  selectedId,
-  onSelect,
-  onToggle,
-  onDragEnd,
-  taskCat,
-  categories,
-  childCountByTask,
-}: {
-  buckets: Record<Quadrant, Task[]>;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  onToggle: (t: Task, done: boolean) => void;
-  onDragEnd: (t: Task, target: Quadrant) => void;
-  taskCat: Map<string, string>;
-  categories: PlannerCategory[];
-  childCountByTask: Map<string, number>;
-}) {
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
-  );
-  const [activeId, setActiveId] = useState<string | null>(null);
-  // 拖拽进行中标志（ref，跨渲染不触发重渲）：松手后延迟一帧重置，让 click 守卫挡掉误触（防拖拽误开详情）
-  const draggingRef = useRef(false);
-
-  const onDragStart = (e: DragStartEvent) => {
-    draggingRef.current = true;
-    setActiveId(String(e.active.id));
-  };
-  const handleDragEnd = (e: DragEndEvent) => {
-    setActiveId(null);
-    const { active, over } = e;
-    if (over) {
-      const task = active.data.current?.task as Task | undefined;
-      if (task && task.source_line != null) onDragEnd(task, over.id as Quadrant);
-    }
-    // 延迟一帧重置：让本次拖拽松手后的 click 先被 PlannerTaskCard 守卫挡掉
-    setTimeout(() => {
-      draggingRef.current = false;
-    }, 0);
-  };
-
-  // 拖拽中的任务（DragOverlay 克隆用）：从 buckets 找 activeId 对应 task
-  const activeTask = activeId
-    ? (Object.values(buckets).flat() as Task[]).find((t) => t.id === activeId) ?? null
-    : null;
-
-  return (
-    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={handleDragEnd}>
-      <div className="planner-quads">
-        {QUAD_ORDER.map((key) => (
-          <QuadBox
-            key={key}
-            def={QUADS[key]}
-            tasks={buckets[key]}
-            selectedId={selectedId}
-            onSelect={onSelect}
-            onToggle={onToggle}
-            taskCat={taskCat}
-            categories={categories}
-            childCountByTask={childCountByTask}
-            draggingRef={draggingRef}
-          />
-        ))}
-      </div>
-      {/* DragOverlay 克隆任务卡（rotate 2° + e4 阴影，可见所拖对象；spring 缓动消除"啪"感） */}
+      {/* DragOverlay 克隆任务卡（rotate 2° + e4 阴影；spring 缓动消除「啪」感）。
+          原在 QuadrantArea 内，DndContext 提升后随之上提到本页顶层。 */}
       <DragOverlay dropAnimation={{ duration: 200, easing: "cubic-bezier(0.34, 1.56, 0.64, 1)" }}>
         {activeTask ? (
           <div className="planner-card-overlay">
@@ -865,676 +820,3 @@ function QuadrantArea({
   );
 }
 
-function QuadBox({
-  def,
-  tasks,
-  selectedId,
-  onSelect,
-  onToggle,
-  taskCat,
-  categories,
-  childCountByTask,
-  draggingRef,
-}: {
-  def: QuadDef;
-  tasks: Task[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  onToggle: (t: Task, done: boolean) => void;
-  taskCat: Map<string, string>;
-  categories: PlannerCategory[];
-  childCountByTask: Map<string, number>;
-  draggingRef: { current: boolean };
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id: def.key });
-  return (
-    <div ref={setNodeRef} className={`planner-quad ${def.cls} ${isOver ? "over" : ""}`}>
-      <div className="planner-quad-head">
-        <span className="planner-quad-emoji">
-          <AppIcon name={def.icon} size={15} />
-        </span>
-        <span className="planner-quad-name">{def.name}</span>
-        <span className="planner-quad-tag">
-          {def.tip} · {tasks.length}
-        </span>
-      </div>
-      <div className="planner-quad-sub">{def.sub}</div>
-      <div className="planner-quad-tasks">
-        {tasks.length === 0 ? (
-          <div className="planner-empty-tip">暂无任务</div>
-        ) : (
-          tasks.map((t) => (
-            <PlannerTaskCard
-              key={t.id}
-              task={t}
-              selected={selectedId === t.id}
-              childCount={childCountByTask.get(t.id) ?? 0}
-              onSelect={() => onSelect(t.id)}
-              onToggle={onToggle}
-              catName={catName(taskCat.get(t.id), categories)}
-              draggingRef={draggingRef}
-            />
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** 分类 id → 分类名（用于卡片 meta 文本，不带图标） */
-function catName(catId: string | undefined, categories: PlannerCategory[]): string {
-  if (!catId || catId === SYS_ALL || catId === SYS_INBOX) return "";
-  const c = categories.find((x) => x.id === catId);
-  return c ? c.name : "";
-}
-
-// ============================================================
-// 任务卡（紧凑：checkbox + 标题 + meta[分类/期限/重复/子计划数] + 选中态 + 拖拽）
-// ============================================================
-function PlannerTaskCard({
-  task,
-  selected,
-  childCount,
-  onSelect,
-  onToggle,
-  catName: catLabel,
-  draggingRef,
-}: {
-  task: Task;
-  selected: boolean;
-  childCount: number;
-  onSelect: () => void;
-  onToggle: (t: Task, done: boolean) => void;
-  catName: string;
-  draggingRef: { current: boolean };
-}) {
-  const hasChildren = childCount > 0;
-  const canDrag = task.source_line != null;
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: task.id,
-    data: { task },
-    disabled: !canDrag,
-  });
-  const due = task.due_date ? task.due_date.slice(5) : "无期限";
-  const overdue = task.due_date ? task.due_date < todayStr() : false;
-  return (
-    <div
-      ref={setNodeRef}
-      className={`planner-task-card ${selected ? "selected" : ""} ${isDragging ? "dragging" : ""}`}
-      {...attributes}
-      {...listeners}
-      onClick={() => {
-        if (!draggingRef.current) onSelect(); // 拖拽松手后的误触 click 抑制
-      }}
-    >
-      {task.source_line != null && (
-        <input
-          type="checkbox"
-          className="planner-ck"
-          checked={task.done}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => onToggle(task, e.target.checked)}
-        />
-      )}
-      <div className="planner-task-main">
-        <div className={`planner-tc-title ${task.done ? "done" : ""}`}>
-          {hasChildren && (
-            <span className="planner-collection-badge" title="计划合集">
-              <AppIcon name="folder" size={12} />
-            </span>
-          )}
-          {task.text}
-        </div>
-        <div className="planner-tc-meta">
-          {catLabel && <span>{catLabel}</span>}
-          <span
-            className={overdue ? "overdue" : ""}
-            style={{ display: "inline-flex", alignItems: "center", gap: 3 }}
-          >
-            {overdue && <AppIcon name="warning" size={11} color="var(--q1)" />}
-            <AppIcon name="calendar" size={11} />
-            {due}
-          </span>
-          {task.repeat_rule && <AppIcon name="reload" size={11} />}
-          {hasChildren && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
-              <AppIcon name="apps" size={11} />
-              {childCount}
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// 迷你月历（周一首日，有任务日期带点，今天高亮，点日期预填输入条）
-// ============================================================
-function MiniCalendar({
-  viewMonth,
-  onPrev,
-  onNext,
-  dueDateSet,
-  selectedDue,
-  onPickDate,
-}: {
-  viewMonth: dayjs.Dayjs;
-  onPrev: () => void;
-  onNext: () => void;
-  dueDateSet: Set<string>;
-  selectedDue: string | null;
-  onPickDate: (d: string) => void;
-}) {
-  const today = todayStr();
-  const startOfMonth = viewMonth.startOf("month");
-  const daysInMonth = viewMonth.daysInMonth();
-  const firstWeekday = (startOfMonth.day() + 6) % 7; // 周一首：周一=0...周日=6
-  const prevMonth = viewMonth.subtract(1, "month");
-  const prevDaysInMonth = prevMonth.daysInMonth();
-
-  const heads = ["一", "二", "三", "四", "五", "六", "日"];
-  type Cell = { day: number; dateStr: string; other: boolean };
-  const cells: Cell[] = [];
-  for (let i = firstWeekday - 1; i >= 0; i--) {
-    const d = prevDaysInMonth - i;
-    cells.push({ day: d, dateStr: prevMonth.date(d).format("YYYY-MM-DD"), other: true });
-  }
-  for (let d = 1; d <= daysInMonth; d++) {
-    cells.push({ day: d, dateStr: viewMonth.date(d).format("YYYY-MM-DD"), other: false });
-  }
-  const nextMonth = viewMonth.add(1, "month");
-  let n = 1;
-  while (cells.length < 42) {
-    cells.push({ day: n, dateStr: nextMonth.date(n).format("YYYY-MM-DD"), other: true });
-    n++;
-  }
-
-  return (
-    <div className="planner-panel planner-cal">
-      <div className="planner-cal-head">
-        <div className="planner-cal-month">{viewMonth.format("YYYY年MM月")}</div>
-        <div className="planner-cal-nav">
-          <button onClick={onPrev}>
-            <AppIcon name="left" size={11} />
-          </button>
-          <button onClick={onNext}>
-            <AppIcon name="right" size={11} />
-          </button>
-        </div>
-      </div>
-      <div className="planner-cal-grid">
-        {heads.map((h, i) => (
-          <div key={h} className={`planner-cal-wk ${i >= 5 ? "weekend" : ""}`}>
-            {h}
-          </div>
-        ))}
-        {cells.map((c, i) => {
-          const isToday = c.dateStr === today;
-          const isSelected = selectedDue === c.dateStr;
-          const hasTask = dueDateSet.has(c.dateStr);
-          const cls = [
-            "planner-cal-day",
-            c.other ? "other" : "",
-            isToday ? "today" : "",
-            isSelected ? "selected" : "",
-          ].join(" ").trim();
-          return (
-            <div key={i} className={cls} onClick={() => onPickDate(c.dateStr)}>
-              {c.day}
-              {hasTask && <span className="planner-cal-dot" />}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// 右栏：计划详情（标题/描述/子计划/期限快捷/属性行▶可展开 / 底部保存+删除+更多）
-// ============================================================
-function DetailPanel({
-  task,
-  categories,
-  taskCat,
-  childTasks,
-  projectName,
-  projectById,
-  onClose,
-  onToggle,
-  onQuadChange,
-  onRebuild,
-  onDescChange,
-  onAddChild,
-  onSetProject,
-  onDelete,
-  onDeleteChild,
-  onDuplicate,
-}: {
-  task: Task | null;
-  categories: PlannerCategory[];
-  taskCat: Map<string, string>;
-  childTasks: Task[];
-  projectName: string | null;
-  projectById: Map<string, Project>;
-  onClose: () => void;
-  onToggle: (t: Task, done: boolean) => void;
-  onQuadChange: (t: Task, q: Quadrant) => void;
-  onRebuild: (
-    t: Task,
-    overrides: {
-      text?: string;
-      dueDate?: string | null;
-      repeatRule?: string | null;
-      projectName?: string | null;
-    }
-  ) => void;
-  onDescChange: (t: Task, newDesc: string, descLineNo: number | null) => void;
-  onAddChild: (t: Task, childText: string, afterLine: number) => Promise<boolean>;
-  onSetProject: (name: string | null) => void;
-  onDelete: () => void;
-  onDeleteChild: (c: Task) => void;
-  onDuplicate: () => void;
-}) {
-  const [openAttr, setOpenAttr] = useState<string | null>(null);
-  // 描述：从源笔记正文解析任务下一行的缩进纯文本（Obsidian Tasks 惯例）
-  const [desc, setDesc] = useState<{ text: string; lineNo: number | null }>({
-    text: "",
-    lineNo: null,
-  });
-  const [descDraft, setDescDraft] = useState(""); // 输入中的草稿（失焦才写回）
-  const [titleDraft, setTitleDraft] = useState(""); // 标题草稿（失焦写回，避免每键 IPC，Blocker #2）
-  const newChildRef = useRef<HTMLInputElement>(null);
-  const [newChild, setNewChild] = useState(""); // 子计划新增输入
-
-  // 切任务 → 拉源笔记解析描述
-  useEffect(() => {
-    if (!task || task.source_line == null) {
-      setDesc({ text: "", lineNo: null });
-      setDescDraft("");
-      return;
-    }
-    let cancelled = false;
-    const sl = task.source_line;
-    api
-      .getNoteContent(task.note_id)
-      .then((nc) => {
-        if (cancelled) return;
-        const d = parseDesc(nc.raw_content, sl);
-        const next = d ? { text: d.text, lineNo: d.lineNo } : { text: "", lineNo: null };
-        setDesc(next);
-        setDescDraft(next.text);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setDesc({ text: "", lineNo: null });
-        setDescDraft("");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [task?.id, task?.source_line]);
-
-  // 标题草稿：切任务（task.id 变）时重置。输入只改 draft，失焦才写回 vault（Blocker #2：
-  // 原 onChange 每键 onRebuild → 每键写盘 + 触发 watcher 全量索引，1.9 万 vault 卡死 + input value 跳变光标跑末尾）
-  useEffect(() => {
-    setTitleDraft(task?.text ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task?.id]);
-
-  if (!task) {
-    return (
-      <div className="planner-panel planner-detail-empty">
-        <div className="planner-detail-empty-inner">
-          <div className="planner-detail-big">
-            <AppIcon name="note" size={40} />
-          </div>
-          <div>点击任务查看详情</div>
-          <div className="planner-detail-hint">或在顶部输入框添加计划</div>
-        </div>
-      </div>
-    );
-  }
-
-  const isAgg = task.source_line == null;
-  const effUrgency = effectiveUrgency(task); // 三态口径（与矩阵/列表同源，Blocker #1 方案 B）
-  const quad = classifyQuadrant(task, effUrgency);
-  const qDef = QUADS[quad];
-  const catId = taskCat.get(task.id);
-  const curCat = categories.find((c) => c.id === catId);
-  const catLabel = catName(catId, categories) || "收集箱";
-  const due = task.due_date ?? "";
-
-  // 描述失焦写回（草稿与已加载描述不同才写，避免无谓 IPC）
-  const commitDesc = () => {
-    if (descDraft.trim() === desc.text.trim()) return;
-    onDescChange(task, descDraft, desc.lineNo);
-  };
-
-  // 子计划回车：乐观插入 + 焦点保持。写回中或失败不清空输入（不丢字）。
-  const onChildEnter = async () => {
-    // 显式守卫聚合任务（source_line=null）：去掉非空断言，避免未来移除 !isAgg 守卫时崩溃（High #7）
-    const afterLine = desc.lineNo ?? task.source_line;
-    if (afterLine == null) return;
-    const ok = await onAddChild(task, newChild, afterLine);
-    if (ok) setNewChild("");
-    requestAnimationFrame(() => newChildRef.current?.focus());
-  };
-
-  // 「更多」下拉菜单（label 带 AppIcon，统一图标，无 emoji）
-  const moreMenu = {
-    items: [
-      { key: "today", label: (<><AppIcon name="calendar" size={12} /> 标为今日</>) },
-      { key: "clear", label: (<><AppIcon name="close" size={12} /> 清除期限</>) },
-      { type: "divider" as const },
-      { key: "dup", label: (<><AppIcon name="copy" size={12} /> 复制任务到今日待办</>) },
-    ],
-    onClick: ({ key }: { key: string }) => {
-      if (key === "today") onRebuild(task, { dueDate: todayStr() });
-      else if (key === "clear") onRebuild(task, { dueDate: "" });
-      else if (key === "dup") onDuplicate();
-    },
-  };
-
-  return (
-    <div className="planner-panel planner-detail">
-      <div className="planner-detail">
-        <div className="planner-detail-head">
-          <span className="planner-detail-emoji">
-            <AppIcon name={qDef.icon} size={18} />
-          </span>
-          <div className="planner-detail-main">
-            <div className="planner-detail-title-row">
-              <input
-                className="planner-field-input planner-detail-title"
-                value={titleDraft}
-                disabled={isAgg}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onBlur={() => {
-                  // 失焦写回：草稿与原 text 不同才写，避免无谓 IPC（与描述 textarea 同模式）
-                  if (titleDraft.trim() !== task.text.trim()) {
-                    onRebuild(task, { text: titleDraft.trim() });
-                  }
-                }}
-                placeholder={isAgg ? "聚合任务（不可编辑）" : "计划标题"}
-              />
-              <span className={`planner-quad-badge ${qDef.cls}`}>{quad.toUpperCase()}</span>
-            </div>
-            <div className="planner-detail-sub">
-              {qDef.name} · {qDef.tip}
-              {projectName && (
-                <span>
-                  {" · "}
-                  <AppIcon name="folder" size={12} /> {projectName}
-                </span>
-              )}
-              {childTasks.length > 0 && (
-                <span>
-                  {" · "}
-                  <AppIcon name="folder" size={12} /> 计划合集（{childTasks.length} 子计划）
-                </span>
-              )}
-            </div>
-          </div>
-          <button className="planner-detail-close" onClick={onClose} title="关闭">
-            <AppIcon name="close" size={16} />
-          </button>
-        </div>
-
-        <div className="planner-detail-body">
-          {/* 子计划：读 + 删 + 新增（insertLineAfter 父任务行后，缩进 checkbox 归属父） */}
-          <div className="planner-field">
-            <label className="planner-field-label">
-              <AppIcon name="apps" size={12} /> 子计划（{childTasks.length}）
-            </label>
-            <div className="planner-sub-list">
-              {childTasks.length === 0 && !isAgg && (
-                <div className="planner-sub-empty">暂无子计划</div>
-              )}
-              {childTasks.map((c) => (
-                <div key={c.id} className="planner-sub-row">
-                  <input
-                    type="checkbox"
-                    className="planner-ck"
-                    checked={c.done}
-                    onChange={(e) => onToggle(c, e.target.checked)}
-                  />
-                  <span className={`planner-sub-text ${c.done ? "done" : ""}`}>{c.text}</span>
-                  <button
-                    className="planner-sub-del"
-                    title="删除子计划"
-                    onClick={() => onDeleteChild(c)}
-                  >
-                    <AppIcon name="close" size={10} />
-                  </button>
-                </div>
-              ))}
-            </div>
-            {!isAgg && (
-              <div className="planner-add-sub-row">
-                <input
-                  ref={newChildRef}
-                  className="planner-add-sub-input"
-                  placeholder="添加子计划，回车保存"
-                  value={newChild}
-                  onChange={(e) => setNewChild(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      onChildEnter();
-                    }
-                  }}
-                />
-              </div>
-            )}
-          </div>
-
-          {/* 描述：任务行下方的缩进纯文本（Obsidian Tasks 惯例），失焦写回。
-              parseDesc 扫描跳过子任务 bullet，描述无论在子计划前/后都能解析到。 */}
-          <div className="planner-field">
-            <label className="planner-field-label">
-              <AppIcon name="note" size={12} /> 描述
-            </label>
-            <textarea
-              className="planner-field-input planner-desc-input"
-              placeholder={isAgg ? "聚合任务不可编辑" : "选填：补充说明（保存到任务下方缩进文本）"}
-              value={descDraft}
-              disabled={isAgg}
-              onChange={(e) => setDescDraft(e.target.value)}
-              onBlur={commitDesc}
-              rows={2}
-            />
-          </div>
-
-          {/* 完成期限：今天/明天/选择日期/放入收集箱 → 重组写回 */}
-          <div className="planner-field">
-            <label className="planner-field-label">
-              <AppIcon name="calendar" size={12} /> 完成期限
-            </label>
-            <div className="planner-date-row">
-              <div
-                className={`planner-date-chip ${due === todayStr() ? "active" : ""}`}
-                onClick={() => !isAgg && onRebuild(task, { dueDate: todayStr() })}
-              >
-                今天
-              </div>
-              <div
-                className={`planner-date-chip ${due === tomorrowStr() ? "active" : ""}`}
-                onClick={() => !isAgg && onRebuild(task, { dueDate: tomorrowStr() })}
-              >
-                明天
-              </div>
-              <label className="planner-date-chip" title="选择日期">
-                选择日期
-                <input
-                  type="date"
-                  value={due}
-                  disabled={isAgg}
-                  onChange={(e) => onRebuild(task, { dueDate: e.target.value })}
-                />
-              </label>
-              <div
-                className={`planner-date-chip ${due === "" ? "active" : ""}`}
-                onClick={() => !isAgg && onRebuild(task, { dueDate: "" })}
-              >
-                放入收集箱
-              </div>
-            </div>
-          </div>
-
-          {/* 属性行 ▶ 可展开 */}
-          {/* 计划分类：推导展示 + project 类可手动改（dir/tag 类给路径提示） */}
-          <AttrRow
-            label={<><AppIcon name="apps" size={13} /> 计划分类</>}
-            value={catLabel}
-            open={openAttr === "cat"}
-            onToggle={() => setOpenAttr(openAttr === "cat" ? null : "cat")}
-          >
-            <div className="planner-cat-current">
-              {curCat
-                ? `当前依据：${matcherLabel(curCat)}`
-                : "未匹配任何自定义分类（落收集箱）"}
-            </div>
-            <div className="planner-opt-row">
-              <button
-                className={`planner-opt-chip ${!task.project_id ? "active" : ""}`}
-                onClick={() => onSetProject(null)}
-                title="清除任务的项目标记（落收集箱，若无其他匹配）"
-              >
-                <AppIcon name="inbox" size={13} /> 无项目
-              </button>
-              {categories
-                .filter((c) => c.matcher.kind === "project" && c.matcher.value)
-                .map((c) => {
-                  const pid = c.matcher.value;
-                  const active = task.project_id === pid;
-                  return (
-                    <button
-                      key={c.id}
-                      className={`planner-opt-chip ${active ? "active" : ""}`}
-                      onClick={() =>
-                        onSetProject(projectById.get(c.matcher.value)?.name ?? null)
-                      }
-                      title="关联到项目（任务加 #project 标记）"
-                    >
-                      <AppIcon name={c.icon} size={12} /> {c.name}
-                    </button>
-                  );
-                })}
-            </div>
-            {(categories.some((c) => c.matcher.kind === "dir") ||
-              categories.some((c) => c.matcher.kind === "tag")) && (
-              <div className="planner-attr-note">
-                文件夹/标签类分类按源笔记位置推导：改笔记所在文件夹（文件树拖动）或笔记标签（笔记编辑器）即可改归类。
-              </div>
-            )}
-          </AttrRow>
-
-          {/* 重要优先级（象限）：4 chip → priority + urgency */}
-          <AttrRow
-            label={<><AppIcon name="thunder" size={13} /> 重要优先级</>}
-            value={<><AppIcon name={qDef.icon} size={13} /> {qDef.name}</>}
-            open={openAttr === "quad"}
-            onToggle={() => setOpenAttr(openAttr === "quad" ? null : "quad")}
-          >
-            <div className="planner-opt-row">
-              {QUAD_ORDER.map((key) => {
-                const q = QUADS[key];
-                return (
-                  <button
-                    key={key}
-                    className={`planner-opt-chip ${q.cls} ${quad === key ? "active" : ""}`}
-                    onClick={() => !isAgg && onQuadChange(task, key)}
-                  >
-                    <AppIcon name={q.icon} size={13} /> {q.name}
-                  </button>
-                );
-              })}
-            </div>
-          </AttrRow>
-
-          {/* 重复：不重复/每天/每周/每月 → 重组写回 */}
-          <AttrRow
-            label={<><AppIcon name="reload" size={13} /> 重复</>}
-            value={REPEAT_OPTIONS.find((r) => r.key === (task.repeat_rule ?? ""))?.label ?? "无"}
-            open={openAttr === "repeat"}
-            onToggle={() => setOpenAttr(openAttr === "repeat" ? null : "repeat")}
-          >
-            <div className="planner-opt-row">
-              {REPEAT_OPTIONS.map((r) => (
-                <button
-                  key={r.key}
-                  className={`planner-opt-chip ${(task.repeat_rule ?? "") === r.key ? "active" : ""}`}
-                  onClick={() => !isAgg && onRebuild(task, { repeatRule: r.key })}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          </AttrRow>
-        </div>
-
-        <div className="planner-detail-foot">
-          {/* 即时保存模式：无显式保存按钮（旧版"保存"onClick 只 toast 不写盘，是反模式）。
-              底部细字提示让用户明确"改动已即时落盘"，避免"必须点保存才生效"的误解。 */}
-          <div className="planner-detail-autosave">
-            <AppIcon name="check" size={12} /> 所有改动已自动保存
-          </div>
-          <Popconfirm
-            title="删除该计划？"
-            onConfirm={onDelete}
-            okText="删除"
-            cancelText="取消"
-            disabled={isAgg}
-          >
-            <button className="planner-icon-only" title="删除" disabled={isAgg}>
-              <AppIcon name="delete" size={16} />
-            </button>
-          </Popconfirm>
-          <Dropdown menu={moreMenu} trigger={["click"]} disabled={isAgg}>
-            <button className="planner-icon-only" title="更多" disabled={isAgg}>
-              <AppIcon name="ellipsis" size={16} />
-            </button>
-          </Dropdown>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** 分类映射源的可读标签 */
-function matcherLabel(c: PlannerCategory): string {
-  const m = c.matcher;
-  if (!m.value) return `${c.name}（未设映射源）`;
-  if (m.kind === "project") return `${c.name} · 关联项目`;
-  if (m.kind === "dir") return `${c.name} · 文件夹「${m.value}」`;
-  return `${c.name} · 标签「${m.value}」`;
-}
-
-/** 属性行（▶ 可展开） */
-function AttrRow({
-  label,
-  value,
-  open,
-  onToggle,
-  children,
-}: {
-  label: ReactNode;
-  value: ReactNode;
-  open: boolean;
-  onToggle: () => void;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="planner-field">
-      <div className={`planner-attr-row ${open ? "open" : ""}`} onClick={onToggle}>
-        <span className="planner-attr-label">{label}</span>
-        <span className="planner-attr-value">
-          {value} <span className="planner-attr-arrow"><AppIcon name="caret-right" size={9} /></span>
-        </span>
-      </div>
-      <div className={`planner-attr-options ${open ? "show" : ""}`}>{children}</div>
-    </div>
-  );
-}

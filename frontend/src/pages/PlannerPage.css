@@ -82,6 +82,113 @@ html.dark .planner-page {
   margin-top: 3px;
 }
 
+/* InboxBox：GTD 未排程列表（DnD droppable，温和版 isInbox 任务；与下方分类收集箱 SYS_INBOX 不同）*/
+.planner-inbox-list {
+  background: var(--ob-accent-mod);
+  border: 1px solid transparent;
+  border-radius: var(--ob-radius);
+  padding: 10px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.planner-inbox-list.over {
+  border-color: var(--ob-accent);
+  background: var(--ob-bg);
+}
+.planner-inbox-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  min-width: 18px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ob-accent);
+  background: var(--ob-bg);
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.planner-inbox-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.planner-inbox-more {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  color: var(--ob-accent);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 0 0;
+}
+/* 详情 header 所属文档链接（点击打开源笔记）*/
+.planner-doc-link {
+  color: var(--ob-accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+.planner-doc-link:hover {
+  text-decoration: underline;
+}
+
+/* 当日计划列表（MiniCalendar 点击日期后显示在日历下方）*/
+.planner-cal-tasks {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--ob-bg);
+  border: 1px solid var(--ob-border);
+  border-radius: var(--ob-radius);
+}
+.planner-cal-tasks-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ob-text-muted);
+  margin-bottom: 4px;
+}
+.planner-cal-tasks-close {
+  border: none;
+  background: transparent;
+  color: var(--ob-text-faint);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+}
+.planner-cal-task {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  cursor: pointer;
+  font-size: 12px;
+}
+.planner-cal-task:hover {
+  color: var(--ob-accent);
+}
+.planner-cal-task-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.planner-cal-task-dot.q1 { background: var(--q1); }
+.planner-cal-task-dot.q2 { background: var(--q2); }
+.planner-cal-task-dot.q3 { background: var(--q3); }
+.planner-cal-task-dot.q4 { background: var(--q4); }
+.planner-cal-task-text.done {
+  color: var(--ob-text-faint);
+  text-decoration: line-through;
+}
+.planner-inbox-more:hover {
+  text-decoration: underline;
+}
+
 /* ============ 左栏：分类列表 ============ */
 .planner-cat-list {
   display: flex;
@@ -271,17 +378,22 @@ html.dark .planner-page {
   min-height: 0;
   overflow: hidden;
 }
+/* 四象限重力视觉：象限色从顶部渐渗（淡底 → 白），增强象限辨识 + 重量感（重要紧急的红更"沉"）*/
 .planner-quad.q1 {
   border-color: var(--q1);
+  background: linear-gradient(180deg, var(--q1-bg) 0%, var(--ob-bg) 45%);
 }
 .planner-quad.q2 {
   border-color: var(--q2);
+  background: linear-gradient(180deg, var(--q2-bg) 0%, var(--ob-bg) 45%);
 }
 .planner-quad.q3 {
   border-color: var(--q3);
+  background: linear-gradient(180deg, var(--q3-bg) 0%, var(--ob-bg) 45%);
 }
 .planner-quad.q4 {
   border-color: var(--q4);
+  background: linear-gradient(180deg, var(--q4-bg) 0%, var(--ob-bg) 45%);
 }
 /* isOver 按象限原色 inset 加深（替换旧紫色外阴影），落点一目了然 */
 .planner-quad.q1.over {
@@ -407,6 +519,21 @@ html.dark .planner-page {
 .planner-task-card.dragging {
   opacity: 0.5;
 }
+/* 临时/聚合任务（source_line=null，不可写回）：半透明 + 默认光标，视觉提示「保存中/只读」*/
+.planner-task-card.ghost {
+  opacity: 0.5;
+  cursor: default;
+}
+/* 完成收束动效（记忆点③）：勾选完成时卡片向完成态"收束"——轻微缩拢 + 透明度下沉再回弹，
+   呼应四象限重力视觉；用 transform 不触发 reflow，不影响周边卡片布局。*/
+@keyframes planner-complete {
+  0%   { transform: scale(1);    opacity: 1;    }
+  40%  { transform: scale(0.95); opacity: 0.55; }
+  100% { transform: scale(1);    opacity: 1;    }
+}
+.planner-task-card.just-completed {
+  animation: planner-complete 0.36s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
 .planner-ck {
   margin-top: 2px;
   accent-color: var(--ob-accent);
@@ -492,13 +619,13 @@ html.dark .planner-page {
   color: var(--ob-text-muted);
 }
 .planner-qa-date {
-  width: 30px;
+  width: 108px;
   height: 26px;
   border: none;
   background: transparent;
   cursor: pointer;
   color: var(--ob-text-muted);
-  font-size: 14px;
+  font-size: 12px;
   padding: 0;
 }
 .planner-qa-clear {
