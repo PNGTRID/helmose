@@ -58,7 +58,7 @@ vault 规模约 **1.9 万 md 文件**。以下规则必须遵守：
 ## 编码规范
 
 - **注释一律中文**（与现有代码库一致）。
-- Rust 命令：`#[tauri::command] fn xxx(...) -> Result<T, String>`，错误统一 `.map_err(|e| e.to_string())?`。
+- Rust 命令：`#[tauri::command] fn xxx(...) -> AppResult<T>`（= `Result<T, AppError>`，定义在 `models/error.rs`，9 variant + 自定义 Serialize 输出 `{code, message}`）。错误优先具体 variant：业务错用构造器（`AppError::not_found/invalid_input/conflict/precondition_failed(...)`），底层错用 `#[from]` 裸 `?`（rusqlite→`Db` / io→`Io` / serde→`Serde` / tauri→`Internal` 自动）；**慎用 `.map_err(|e| e.to_string())?`**（经 `From<String>` 走 `Internal` 兜底，丢 variant）。前端 `api/index.ts` invoke 包装把 reject 归一化成 AppError 对象（`toString()=message` 兜底零破），`utils/notifyError.ts` 按 code 分流消费。
 - Rust 模块经 `mod.rs` 暴露；跨模块用 `crate::` 绝对路径。
 - React 页面：hooks → 早返回 → JSX；类型集中 `types/index.ts`；API 集中 `api/index.ts`。
 - 改代码前**先读后写**，理解现有约定再动手（如 `SqliteDatabase::query_map` 返回 `Vec`、`query_row` 返回 `Option`）。
@@ -112,22 +112,30 @@ vault 规模约 **1.9 万 md 文件**。以下规则必须遵守：
 - **项目进度聚合 `get_project_progress`**（M5，`commands/projects.rs`）：运行时聚合项目下任务完成率，**不入 frontmatter**（纯派生展示）。
 - **任务到期提醒（M2，`commands/reminders.rs`）**：`ensure_reminders`（扫 tasks 表 due_date 未来 N 天未完成任务，按「截止前一天 9:00」幂等生成 reminders）+ `fire_due_reminders`（前端 setInterval 60s 调，查到期未发 → `tauri-plugin-notification` 桌面通知 + 标 fired）；查询/标 fired 已拆纯函数可单测。
 - **移动 / 重命名笔记（M1，`commands/note_move.rs`）**：`move_note` / `rename_note`（路径安全校验禁 `..` + 索引层同步）+ `apply_ref_updates`（扫描含 `old_path` 的路径型引用 `[文本](old_path)` / `[[old_path]]`，**用户授权后**逐条经 `save_note_content_inner` 收口写回；按文件名匹配的反链由 links 表自动维护，不进此列表）。
-- **AI 配置 `settings`（M4，`commands/settings.rs`）**：`get_ai_settings` / `set_ai_settings` 存 `app_data_dir/config.json`（key 不入 vault 不入 git，Unix 0600 收紧权限）；`read_ai_settings`（容错版，供 ai 命令壳复用避免漂移）+ `upsert_ai_generation_inner` / 读缓存（降级链兜底）。
+- **AI 配置 `settings`（M4，`commands/settings.rs`）**：`get_ai_settings` / `set_ai_settings` 存 `app_data_dir/config.json`（不入 vault 不入 git，Unix 0600 收紧权限）；**api_key 不进 config.json，走系统钥匙串**（B4，见下 `services/secrets.rs`，keyring v3），config.json 只存 provider/enabled 等非敏感字段；`read_ai_settings`（容错版，供 ai 命令壳复用避免漂移）+ `upsert_ai_generation_inner` / 读缓存（降级链兜底）。
 - **AI 教练层（M4，`commands/ai.rs` + `services/ai/`）**——v0.2 提前部分落地：
   - **抽象层** `services/ai/`：`AiClient` trait（Dyn-safe，provider 切换零业务改动）+ `providers/`（Claude / OpenAI，留 Ollama 本地扩展点）+ `complete_with_budget`；数据最小化（只接聚合摘要字符串，user 硬上限 4k 字符截断，绝不发 vault 原文）+ 30s 超时 + `AiError`（Network/HttpStatus/Parse）绝不 panic。
   - **三个命令**：`ai_mainline`（主线判定，写 `life_state_snapshots.mainline_project`）/ `ai_coach`（每日建议，写 `today_focus`）/ `ai_tomorrow`（明日一句）。
   - **降级链**：未配 key/`build_client`→None → 本地启发式（复用 indexer/projects top-3 口径）→ `ai_generations` 缓存 → 空态；结果带 `source=ai|heuristic` 标降级。
   - **明日一句编辑 `update_tomorrow_sentence`**（前端 `saveTomorrowEdit` 复用同一收口逻辑）。
+- **B3 watcher 生命周期（`services/watcher.rs` 重构为 WatcherManager）**：start/stop/stop_if_watching（stop_flag + recv_timeout 轮询 + join 超时保护），接 reset_app/delete_vault 停 watcher——修复 reset 后旧 watcher 把删除事件往空库写的「数据回潮」bug（8 测试）。
+- **B4 keychain（`services/secrets.rs`）**：api_key 从 config.json 明文挪到系统钥匙串（keyring v3，删 credential 用 `delete_credential` 非 `delete_password`）；老 key 惰性迁移（`plan_migration`/`strip_api_key_from_json` 纯逻辑可单测）；前端零改动（接口面 provider/has_key/enabled + `setApiKey` 不变，7 测试）。
+- **B6/B7/B15 三项小修复**：B6 修 7 处 `.ok()` 吞错（`incremental.rs` 加事务内 `query_optional` helper 区分 `QueryReturnedNoRows` vs 真错，替代 6 处 `tx.query_row().ok()`；`library.rs` repeat_rule 查询去掉多余 `.ok().flatten()`——为 B1 AppError 错误码化铺路）/ B7 `delete_vault_inner` 删 notes 前补 `DELETE FROM notes_fts WHERE rowid IN (SELECT rowid FROM notes WHERE vault_id=?1)` 清 contentless FTS 孤儿（唯一漏清路径；含测试断言 FTS 清零）/ B15 前端 10 处散落 localStorage 收口到 `utils/safeLocalStorage`（App/Onboarding/CommandPalette/FilePanel/AiCoachCard/drafts/recentlyOpened + projectView/taskView/theme 三 store；消除裸 `JSON.parse(localStorage)` 崩溃风险 + 统一容错）。
+
+- **B1/B14 AppError 错误码化端到端**（`models/error.rs`）：9 variant（NotFound/InvalidInput/Conflict/PreconditionFailed/Db/Io/Serde/Secrets/Internal，thiserror + 自定义 Serialize 输出 `{code, message}` + `From<rusqlite/io/serde/String/tauri>`）；62 命令签名 `Result<T, String>` → `AppResult<T>`；显式业务 Err 映射具体 variant（非法→InvalidInput / 已存在→Conflict / not found→NotFound / 源文件丢失→PreconditionFailed），透传型 `.map_err(|e| e.to_string())?` 改裸 `?` 让 `#[from]` 生效（Db/Io/Serde）。前端 `api/index.ts` invoke 包装 reject 归一化成 AppError 对象（`toString()=message` 阶段 1 兼容零破），`utils/notifyError.ts` 按 code 分流（业务错显文案 / 系统错统一「失败请重试」），40 处 `message.error(\`${e}\`)` 收口到 `notifyError`。NotFound 保留 `Ok(None)` 查询契约（前端 null 判断不变），AI 降级链不破坏。B6 `query_optional` 为真错上抛铺路。
+
+- **Phase C 批1 质量加固（17 项，客观裁判全绿；详见 `docs/phase-c-backlog.md`）**：clippy 清零 + ci clippy 门禁（B16-18）；get_notes 去 raw_content（性能红线）+ tasks/events 加索引（vault/project/note）+ incremental/vault `.map_err`→裸 `?`（B14 收尾）；devtools 改 debug-only + panic hook（logging.rs）+ set_api_key 校验 + main println→debug（安全 P0）；export_life_state 去 root_path + watcher 4 处日志脱敏降 debug + index_vault eprintln→tracing::error（信息泄露）；backup_dir_of 抽函数（可维护）；noImplicitOverride 开启（ErrorBoundary/AppError override）+ chunkSizeWarningLimit:1500（构建）；extract_due_from_line/replace_or_append_due +2 纯函数测试（toggle 重复任务推进写回）。剩 28 项待做（含 P0 updater/签名/Sentry 需决策）见 docs。
 
 🚧 **待办**：
 
+- 静默吞 `.catch(() => null)` 15 处评估（核心数据加载如 NoteView 笔记内容/反链、CommandPalette 搜索、GraphPage 图谱可接入 `notifyError` 让用户感知失败；后台探测如 `shouldReindex`/`startWatcher` 保留静默）——B14 收尾，改静默吞会变行为需产品判断，未做（toString=message 兜底已保证不崩）。
 - Agent inbox 写回（状态导出已做，写回未做）。
 - 真实 updater endpoint/pubkey（M5 占位，发布时配）。
 - events 的 `project_id` 关联（event→project 映射未做）。
 - 前向链接的 dangling 提示（当前只显示已解析的）。
 - AI 提醒可配置（当前 `reminders.rs` 固定 LEAD_DAYS=1 / REMIND_HOUR=9，后续接 settings）。
 - AI provider 扩展（`services/ai/providers` 留 Ollama 本地扩展点，未接）。
-- bundle 拆分（manualChunks 拆 vendor，当前 1.78MB 桌面应用本地加载可接受）。
+- bundle 瘦身（manualChunks 拆 vendor + chunkSizeWarningLimit 已消警告；antd 1.15MB 单 chunk 疑全量打包，待核查按需引入，见 `docs/phase-c-backlog.md` §二 P2）。
 
 ## 工作区状态
 

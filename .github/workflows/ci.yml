@@ -52,6 +52,11 @@ jobs:
       - name: cargo check
         run: cargo check --all-targets
 
+      # clippy 门禁：-D warnings 把所有 lint warning 升级为 error，阻断 PR（B16-B18）
+      # fmt 门禁暂缓（待 cargo fmt 全量格式化后再加，避免与未提交改动叠加）
+      - name: cargo clippy (lint gate)
+        run: cargo clippy --all-targets -- -D warnings
+
       # index_real_wiki_smoke 标 #[ignore]（依赖本机 ~/wiki，CI 无此路径）→ cargo test 自动跳过
       - name: cargo test
         run: cargo test
