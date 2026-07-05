@@ -1,6 +1,6 @@
 // 事件查询命令
 
-use crate::models::Event;
+use crate::models::{AppResult, Event};
 use crate::services::Database;
 use tauri::State;
 
@@ -30,7 +30,7 @@ pub fn list_events_inner(
     to: Option<&str>,
     project_id: Option<&str>,
     db: &Database,
-) -> Result<Vec<Event>, String> {
+) -> AppResult<Vec<Event>> {
     let mut sql = String::from(
         "SELECT id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet,source_line \
          FROM events WHERE vault_id = ?1",
@@ -61,7 +61,7 @@ pub fn list_events_inner(
     let rows = db
         .sqlite()
         .query_map(&sql, &pv, row_to_event)
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -73,7 +73,7 @@ pub fn list_events(
     to: Option<String>,
     project_id: Option<String>,
     db: State<'_, Database>,
-) -> Result<Vec<Event>, String> {
+) -> AppResult<Vec<Event>> {
     list_events_inner(
         &vault_id,
         from.as_deref(),

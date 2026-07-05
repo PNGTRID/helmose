@@ -79,7 +79,7 @@ pub fn add_period(date: NaiveDate, rule: &str) -> Option<NaiveDate> {
                     } else {
                         NaiveDate::from_ymd_opt(ny, nm + 1, 1)?
                     };
-                    Some(last.pred_opt()?)
+                    last.pred_opt()
                 })
         }
         wd @ ("Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun") => {

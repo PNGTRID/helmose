@@ -10,7 +10,9 @@ default-run = "helmose"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = ["devtools"] }
+# devtools:Tauri v2 在 debug 构建自动启用(cfg(debug_assertions));release 不带此 feature,
+# 防 webview 右键 Inspect 暴露用户数据(笔记/AI 输入)。开发期 tauri:dev 仍有 devtools。
+tauri = { version = "2.0" }
 tauri-plugin-shell = "2.0"
 tauri-plugin-dialog = "2.0"
 tauri-plugin-fs = "2.0"
@@ -47,6 +49,10 @@ tracing-subscriber = "0.3"
 # reqwest 走 tokio runtime；async_trait 给 AiClient trait 用（dyn-safe）
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 async-trait = "0.1"
+
+# B4：密钥存储（api_key 挪到系统钥匙串，Mac Keychain / Win Credential Manager / Linux Secret Service）
+# v3 Entry::new 返回 Result（非 v2 直接 Entry）；显式选三平台 native backend，否则无默认 store
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 [dev-dependencies]
 tempfile = "3"

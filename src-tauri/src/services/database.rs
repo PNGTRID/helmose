@@ -3,6 +3,7 @@
 // 索引库与 vault 文件分离：SQLite 放 app_data_dir，是派生缓存（删了能重建）
 // ============================================================
 
+use crate::models::AppResult;
 use super::SqliteDatabase;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,10 +15,10 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn new(db_path: PathBuf) -> Result<Self, String> {
+    pub fn new(db_path: PathBuf) -> AppResult<Self> {
         let path = db_path.clone();
-        let sqlite = SqliteDatabase::new(db_path)
-            .map_err(|e| format!("Failed to create database: {:?}", e))?;
+        // SqliteDatabase::new 返 rusqlite::Error → 经 #[from] 自动转 AppError::Db（B14：底层错裸 ?）
+        let sqlite = SqliteDatabase::new(db_path)?;
         Ok(Self { sqlite: Arc::new(sqlite), path })
     }
 
@@ -30,15 +31,13 @@ impl Database {
     }
 
     /// 初始化 schema（幂等，按 ; 拆分逐条执行）
-    pub fn init_schema(&self) -> Result<(), String> {
+    pub fn init_schema(&self) -> AppResult<()> {
         for stmt in SCHEMA.split(';') {
             let stmt = stmt.trim();
             if stmt.is_empty() {
                 continue;
             }
-            self.sqlite
-                .execute(stmt, &[])
-                .map_err(|e| format!("schema init failed: {:?} | sql: {}", e, &stmt[..stmt.len().min(80)]))?;
+            self.sqlite.execute(stmt, &[])?; // rusqlite::Error → AppError::Db（#[from]）
         }
         // 老库 migration（CREATE TABLE IF NOT EXISTS 不会给已存在的表加列）
         self.migrate()?;
@@ -46,78 +45,66 @@ impl Database {
     }
 
     /// 幂等 migration：检查列是否存在，缺则 ALTER ADD COLUMN。新库 SCHEMA 自带列会跳过。
-    fn migrate(&self) -> Result<(), String> {
+    fn migrate(&self) -> AppResult<()> {
         // events.source_line（inline-crud 新增，供事件就地编辑/删除定位原文行）
         let cols: Vec<String> = self
             .sqlite()
-            .query_map("PRAGMA table_info(events)", &[], |r| r.get::<_, String>(1))
-            .map_err(|e| e.to_string())?;
+            .query_map("PRAGMA table_info(events)", &[], |r| r.get::<_, String>(1))?;
         if !cols.iter().any(|c| c == "source_line") {
             self.sqlite()
-                .execute("ALTER TABLE events ADD COLUMN source_line INTEGER", &[])
-                .map_err(|e| format!("migrate events.source_line failed: {:?}", e))?;
+                .execute("ALTER TABLE events ADD COLUMN source_line INTEGER", &[])?;
         }
 
         // M3：tasks 加 status / priority / urgency 三列；旧数据 done=1 反填 status='done'
         let task_cols: Vec<String> = self
             .sqlite()
-            .query_map("PRAGMA table_info(tasks)", &[], |r| r.get::<_, String>(1))
-            .map_err(|e| e.to_string())?;
+            .query_map("PRAGMA table_info(tasks)", &[], |r| r.get::<_, String>(1))?;
         if !task_cols.iter().any(|c| c == "status") {
             self.sqlite()
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'todo'",
                     &[],
-                )
-                .map_err(|e| format!("migrate tasks.status failed: {:?}", e))?;
+                )?;
         }
         if !task_cols.iter().any(|c| c == "priority") {
             self.sqlite()
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
                     &[],
-                )
-                .map_err(|e| format!("migrate tasks.priority failed: {:?}", e))?;
+                )?;
         }
         if !task_cols.iter().any(|c| c == "urgency") {
             self.sqlite()
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN urgency TEXT NOT NULL DEFAULT 'low'",
                     &[],
-                )
-                .map_err(|e| format!("migrate tasks.urgency failed: {:?}", e))?;
+                )?;
         }
         // done=1 反填 status='done'（幂等：只在新增 status 列那次跑过即可，多次执行也无副作用）
         self.sqlite()
-            .execute("UPDATE tasks SET status='done' WHERE done=1 AND status<>'done'", &[])
-            .map_err(|e| format!("migrate tasks backfill status failed: {:?}", e))?;
+            .execute("UPDATE tasks SET status='done' WHERE done=1 AND status<>'done'", &[])?;
 
         // M5：projects 加 owner 列
         let proj_cols: Vec<String> = self
             .sqlite()
-            .query_map("PRAGMA table_info(projects)", &[], |r| r.get::<_, String>(1))
-            .map_err(|e| e.to_string())?;
+            .query_map("PRAGMA table_info(projects)", &[], |r| r.get::<_, String>(1))?;
         if !proj_cols.iter().any(|c| c == "owner") {
             self.sqlite()
-                .execute("ALTER TABLE projects ADD COLUMN owner TEXT", &[])
-                .map_err(|e| format!("migrate projects.owner failed: {:?}", e))?;
+                .execute("ALTER TABLE projects ADD COLUMN owner TEXT", &[])?;
         }
 
         // M2：tasks 加 repeat_rule / parent_task_id 两列（重复任务 + 子任务嵌套）。
         // 新库 SCHEMA 自带两列（下方 CREATE TABLE），此处只给老库 ALTER；幂等：列已存在则跳过。
         let task_cols2: Vec<String> = self
             .sqlite()
-            .query_map("PRAGMA table_info(tasks)", &[], |r| r.get::<_, String>(1))
-            .map_err(|e| e.to_string())?;
+            .query_map("PRAGMA table_info(tasks)", &[], |r| r.get::<_, String>(1))?;
         if !task_cols2.iter().any(|c| c == "repeat_rule") {
             self.sqlite()
-                .execute("ALTER TABLE tasks ADD COLUMN repeat_rule TEXT", &[])
-                .map_err(|e| format!("migrate tasks.repeat_rule failed: {:?}", e))?;
+                .execute("ALTER TABLE tasks ADD COLUMN repeat_rule TEXT", &[])?;
         }
         if !task_cols2.iter().any(|c| c == "parent_task_id") {
             self.sqlite()
-                .execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT", &[])
-                .map_err(|e| format!("migrate tasks.parent_task_id failed: {:?}", e))?;
+                .execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT", &[])?;
         }
         Ok(())
     }
@@ -180,6 +167,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks(done);
+CREATE INDEX IF NOT EXISTS idx_tasks_vault ON tasks(vault_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_note ON tasks(note_id);
 
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
@@ -195,6 +185,8 @@ CREATE TABLE IF NOT EXISTS events (
   source_line INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date);
+CREATE INDEX IF NOT EXISTS idx_events_vault ON events(vault_id);
+CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
 
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,

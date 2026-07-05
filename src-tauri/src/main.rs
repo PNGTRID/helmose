@@ -35,8 +35,12 @@ pub fn run() {
             let db_path = app_data_dir.join("helmose.db");
             let db = Database::new(db_path).expect("failed to init database");
             db.init_schema().expect("failed to init schema");
-            println!("[helmose] db: {}", db.path().display());
+            tracing::debug!("[helmose] db: {}", db.path().display());
             app.manage(db);
+
+            // watcher 管理器（B3 生命周期）：start_watcher / reset_app / delete_vault 共用，
+            // 防 reset/delete 后旧 watcher 把删除事件往已清空 DB 写回（数据回潮）。
+            app.manage(services::watcher::WatcherManager::new());
 
             Ok(())
         })
@@ -122,6 +126,7 @@ pub fn run() {
             // M4：AI 设置（provider/key/enabled，存 app_data_dir/config.json，不入 vault）
             commands::settings::get_ai_settings,
             commands::settings::set_ai_settings,
+            commands::settings::set_api_key,
             // M4：AI 教练（主线判定 + 每日建议 + 明日一句；未配 key 自动降级本地启发式）
             commands::ai::ai_mainline,
             commands::ai::ai_coach,

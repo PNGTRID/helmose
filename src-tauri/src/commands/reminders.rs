@@ -9,7 +9,7 @@
 //   4. reminders 是派生缓存，可由 ensure_reminders 重建
 // ============================================================
 
-use crate::models::Reminder;
+use crate::models::{AppError, AppResult, Reminder};
 use crate::services::Database;
 use crate::utils::dates;
 use chrono::TimeZone;
@@ -45,7 +45,7 @@ fn row_to_reminder(row: &rusqlite::Row) -> rusqlite::Result<Reminder> {
 /// 设计：本期不做 settings 配置（默认 LEAD_DAYS=1 / REMIND_HOUR=9）。
 /// 后续接 settings 时改 lead_days/remind_hour 读取源即可，签名不变。
 #[tauri::command]
-pub fn ensure_reminders(vault_id: String, db: State<'_, Database>) -> Result<usize, String> {
+pub fn ensure_reminders(vault_id: String, db: State<'_, Database>) -> AppResult<usize> {
     let today = dates::today_naive();
     let today_iso = today.format("%Y-%m-%d").to_string();
 
@@ -67,7 +67,7 @@ pub fn ensure_reminders(vault_id: String, db: State<'_, Database>) -> Result<usi
                 ))
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
 
     // 修复 6：消除 N+1——一次拿全部已存在 task_id，内存判定跳过。
     // 旧实现每候选单独 SELECT COUNT(*) FROM reminders WHERE task_id=?（候选 N 条 = N 次查询）。
@@ -91,7 +91,7 @@ pub fn ensure_reminders(vault_id: String, db: State<'_, Database>) -> Result<usi
             let rows = db
                 .sqlite()
                 .query_map(&sql, &pv, |r| r.get::<_, String>(0))
-                .map_err(|e| e.to_string())?;
+                ?;
             for tid in rows {
                 set.insert(tid);
             }
@@ -154,7 +154,7 @@ pub fn ensure_reminders(vault_id: String, db: State<'_, Database>) -> Result<usi
                     created_at
                 ],
             )
-            .map_err(|e| e.to_string())?;
+            ?;
         created += 1;
     }
 
@@ -164,7 +164,7 @@ pub fn ensure_reminders(vault_id: String, db: State<'_, Database>) -> Result<usi
 /// 查到期未发的提醒（fired=0 AND remind_at <= now），按 remind_at 升序。
 /// 纯查询函数（接 &Database，可单测），不含 AppHandle / 通知逻辑（审查 #13）。
 /// 用 UTC 与 ensure_reminders 写入的 remind_at（UTC）字典序对齐。
-pub fn list_due_reminders_inner(db: &Database) -> Result<Vec<Reminder>, String> {
+pub fn list_due_reminders_inner(db: &Database) -> AppResult<Vec<Reminder>> {
     let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
     let due: Vec<Reminder> = db
         .sqlite()
@@ -174,18 +174,18 @@ pub fn list_due_reminders_inner(db: &Database) -> Result<Vec<Reminder>, String> 
             &[&now_iso as &dyn rusqlite::ToSql],
             row_to_reminder,
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(due)
 }
 
 /// 标单条 reminder 已发（fired=1）。返回受影响行数（审查 #13：纯函数可单测）。
-pub fn mark_fired_inner(db: &Database, reminder_id: &str) -> Result<usize, String> {
+pub fn mark_fired_inner(db: &Database, reminder_id: &str) -> AppResult<usize> {
     db.sqlite()
         .execute(
             "UPDATE reminders SET fired = 1 WHERE id = ?1",
             &[&reminder_id as &dyn rusqlite::ToSql],
         )
-        .map_err(|e| e.to_string())
+        .map_err(AppError::Db)
 }
 
 /// 查到期未发的提醒，逐条发桌面通知 + 标 fired=1。返回本次触发的数量。
@@ -194,7 +194,7 @@ pub fn mark_fired_inner(db: &Database, reminder_id: &str) -> Result<usize, Strin
 /// 审查 #13：查询/标 fired 已拆为 list_due_reminders_inner / mark_fired_inner 纯函数，
 /// 本命令壳只剩"通知发送"薄逻辑（依赖 AppHandle 无法单测的部分）。
 #[tauri::command]
-pub fn fire_due_reminders(app: AppHandle, db: State<'_, Database>) -> Result<usize, String> {
+pub fn fire_due_reminders(app: AppHandle, db: State<'_, Database>) -> AppResult<usize> {
     use tauri_plugin_notification::NotificationExt;
 
     let due = list_due_reminders_inner(db.inner())?;

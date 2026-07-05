@@ -6,7 +6,7 @@
 //   3. bm25 排序，JOIN notes 取 vault 过滤与元数据
 // ============================================================
 
-use crate::models::SearchResult;
+use crate::models::{AppResult, SearchResult};
 use crate::services::Database;
 use rusqlite::params;
 use tauri::State;
@@ -14,6 +14,7 @@ use tauri::State;
 /// 清洗用户输入为安全的 FTS5 phrase 匹配串。
 /// - 移除双引号避免破坏 phrase `"…"` 语法
 /// - trigram tokenizer 下，phrase "会员系统" 命中含该连续子串的文档
+///
 /// 返回值用于 MATCH；空串表示无有效查询（调用方返回空结果）。
 fn sanitize_query(q: &str) -> String {
     q.replace('"', "").trim().to_string()
@@ -29,7 +30,7 @@ pub fn search_notes(
     query: String,
     limit: Option<i64>,
     db: State<'_, Database>,
-) -> Result<Vec<SearchResult>, String> {
+) -> AppResult<Vec<SearchResult>> {
     let q = sanitize_query(&query);
     if q.is_empty() {
         return Ok(Vec::new());
@@ -65,6 +66,6 @@ pub fn search_notes(
                 })
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }

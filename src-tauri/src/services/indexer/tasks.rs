@@ -195,6 +195,7 @@ pub fn replace_or_append_due(line: &str, new_iso: &str) -> String {
 ///   1) `⭐×N`      Helmose 老格式（N=1-3，clamp）
 ///   2) `⏫🔼🔽`    Obsidian Tasks 标准（=3/2/1）
 ///   3) `priority:N` Helmose 文字标准（N=1-3，3=最高）
+///
 /// 算值：按格式优先级取首个命中（互斥）；剥离：全剥三格式（含越界脏值），保证混合格式不残留。
 /// 返回 (去掉标记的干净 text, priority)。无任何标记 → (原文, 0)。
 fn split_priority(text: &str) -> (String, i32) {
@@ -216,6 +217,7 @@ fn split_priority(text: &str) -> (String, i32) {
 /// 从 bullet 文本拆出 urgency 并清理标记（读侧二格式兼容）：
 ///   1) `🔥`            Helmose 老格式 = high
 ///   2) `urgency:high|low` Helmose 文字标准（手动二值；mid 仅前端派生，不入 bullet）
+///
 /// 算值后全剥两格式（单一源），保证不残留。返回 (干净 text, urgency)。
 /// 三态语义（Blocker #1 方案 B）：无标记 → ""（未设，前端按 due_date 派生）；
 /// `urgency:low` → "low"（显式不紧急，前端压制 due_date 派生）；🔥/urgency:high → "high"。
@@ -240,6 +242,7 @@ static RE_REPEAT: Lazy<Regex> =
 /// 从 bullet 文本拆出 repeat_rule 并清理标记（读侧二格式兼容）：
 ///   1) `🔁 every xxx` Helmose 老格式（语法错即缺 every / 词不在白名单 → 不清 🔁，保留原文）
 ///   2) `repeat:xxx`   Helmose 文字标准（xxx 同白名单，复用 normalize_repeat_rule）
+///
 /// 返回 (去掉标记的干净 text, repeat_rule)。无有效标记 → (原文, None)。
 fn split_repeat(text: &str) -> (String, Option<String>) {
     // 1) 老：🔁 every xxx（normalize 失败时不清 🔁，保留原文给用户，fallthrough 试 repeat:）
@@ -636,6 +639,37 @@ mod tests {
         assert!(rule.is_none(), "未知词应返回 None");
         // 语法错时 text 不变（保持原文，不强制清理未识别的 🔁）
         assert!(!text.is_empty());
+    }
+
+    #[test]
+    fn extract_due_from_line_三格式与无标记() {
+        use chrono::NaiveDate;
+        let d = |y, m, d| NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        // 📅 emoji
+        assert_eq!(extract_due_from_line("- [ ] 任务 📅 2026-07-01"), Some(d(2026, 7, 1)));
+        // due: 文本
+        assert_eq!(extract_due_from_line("- [ ] 任务 due: 2026-07-01"), Some(d(2026, 7, 1)));
+        // 截止: 中文
+        assert_eq!(extract_due_from_line("- [ ] 任务 截止: 2026-07-01"), Some(d(2026, 7, 1)));
+        // 无标记 → None
+        assert_eq!(extract_due_from_line("- [ ] 任务"), None);
+    }
+
+    #[test]
+    fn replace_or_append_due_替换与追加() {
+        // 已有 📅 → 替换，旧日期不残留
+        let r = replace_or_append_due("- [ ] 任务 📅 2026-06-01", "2026-07-15");
+        assert!(r.contains("📅 2026-07-15"));
+        assert!(!r.contains("2026-06-01"), "旧日期应被替换不残留");
+        // 已有 due: → 替换，保留 due: 语义（不退化为 📅）
+        let r = replace_or_append_due("- [ ] 任务 due: 2026-06-01", "2026-07-15");
+        assert!(r.contains("due: 2026-07-15"));
+        assert!(!r.contains("📅"), "due: 文本标记不应退化为 📅");
+        assert!(!r.contains("2026-06-01"));
+        // 无标记 → 追加 📅，保留原文
+        let r = replace_or_append_due("- [ ] 任务", "2026-07-15");
+        assert!(r.contains("📅 2026-07-15"));
+        assert!(r.contains("任务"));
     }
 
     #[test]

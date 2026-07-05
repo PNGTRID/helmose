@@ -6,7 +6,7 @@
 //   3. 排除目录与 index.rs 保持一致，树视图 = 索引视图
 // ============================================================
 
-use crate::models::{MigrateItem, MigratePlan, MigratePreview, NoteContent, NoteMeta};
+use crate::models::{AppError, AppResult, MigrateItem, MigratePlan, MigratePreview, NoteContent, NoteMeta};
 use crate::services::Database;
 use crate::services::indexer::tasks;
 use crate::utils::exclude::{is_excluded, is_excluded_rel};
@@ -14,7 +14,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::params;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
 use walkdir::WalkDir;
 
@@ -26,7 +26,7 @@ pub struct BackupInfo {
     pub mtime: String,
 }
 
-fn vault_root(vault_id: &str, db: &Database) -> Result<PathBuf, String> {
+fn vault_root(vault_id: &str, db: &Database) -> AppResult<PathBuf> {
     let path = db
         .sqlite()
         .query_row(
@@ -34,7 +34,7 @@ fn vault_root(vault_id: &str, db: &Database) -> Result<PathBuf, String> {
             params![vault_id],
             |row| row.get::<_, String>(0),
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("vault {} not found", vault_id))?;
     Ok(PathBuf::from(path))
 }
@@ -42,7 +42,7 @@ fn vault_root(vault_id: &str, db: &Database) -> Result<PathBuf, String> {
 /// 列出 vault 的所有目录（相对路径，扁平），供前端构建 Obsidian 式文件树。
 /// 根目录用空串 "" 表示。排除隐藏目录 + 大目录（与索引一致）。
 #[tauri::command]
-pub fn list_dirs(vault_id: String, db: State<'_, Database>) -> Result<Vec<String>, String> {
+pub fn list_dirs(vault_id: String, db: State<'_, Database>) -> AppResult<Vec<String>> {
     let root = vault_root(&vault_id, db.inner())?;
     let mut dirs: Vec<String> = vec![String::new()]; // 根
 
@@ -72,7 +72,7 @@ pub fn list_notes_meta(
     dir_prefix: Option<String>,
     limit: Option<i64>,
     db: State<'_, Database>,
-) -> Result<Vec<NoteMeta>, String> {
+) -> AppResult<Vec<NoteMeta>> {
     let prefix = dir_prefix.unwrap_or_default();
     let prefix_slash = if prefix.is_empty() {
         String::new()
@@ -114,7 +114,7 @@ pub fn list_notes_meta(
                 ))
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
 
     let max = limit.unwrap_or(5000) as usize;
     let mut out: Vec<NoteMeta> = Vec::new();
@@ -150,7 +150,7 @@ pub fn list_notes_meta(
 pub fn list_all_notes_meta(
     vault_id: String,
     db: State<'_, Database>,
-) -> Result<Vec<NoteMeta>, String> {
+) -> AppResult<Vec<NoteMeta>> {
     let rows = db
         .sqlite()
         .query_map(
@@ -171,7 +171,7 @@ pub fn list_all_notes_meta(
                 })
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -182,7 +182,7 @@ pub fn list_notes_by_tag_inner(
     tag: &str,
     limit: Option<i64>,
     db: &Database,
-) -> Result<Vec<NoteMeta>, String> {
+) -> AppResult<Vec<NoteMeta>> {
     // LIKE pattern：在 tags JSON（["a","b"]）里精确匹配 "tag" 元素
     let pattern = format!("%\"{}\"%", tag);
     let lim = limit.unwrap_or(500);
@@ -207,7 +207,7 @@ pub fn list_notes_by_tag_inner(
                 })
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -218,13 +218,13 @@ pub fn list_notes_by_tag(
     tag: String,
     limit: Option<i64>,
     db: State<'_, Database>,
-) -> Result<Vec<NoteMeta>, String> {
+) -> AppResult<Vec<NoteMeta>> {
     list_notes_by_tag_inner(&vault_id, &tag, limit, db.inner())
 }
 
 /// 从 DB 查单篇笔记完整 NoteContent（含 note_type/tags/frontmatter + 渲染 HTML）。
 /// 统一 get_note_content / create / save 链路的返回构造（DRY）。找不到 → Err。
-fn fetch_note_content(note_id: &str, db: &Database) -> Result<NoteContent, String> {
+fn fetch_note_content(note_id: &str, db: &Database) -> AppResult<NoteContent> {
     let row = db
         .sqlite()
         .query_row(
@@ -245,7 +245,7 @@ fn fetch_note_content(note_id: &str, db: &Database) -> Result<NoteContent, Strin
                 ))
             },
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("note {} not found", note_id))?;
     let (id, rel_path, title, note_type, tags_json, fm_json, raw_content) = row;
     let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
@@ -269,8 +269,14 @@ fn fetch_note_content(note_id: &str, db: &Database) -> Result<NoteContent, Strin
 pub fn get_note_content(
     note_id: String,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     fetch_note_content(&note_id, db.inner())
+}
+
+/// vault 备份目录（save_note_content_inner / list_backups / delete_backup 共用，
+/// 统一约定 .helmose/backup；改目录约定只改这一处）。
+fn backup_dir_of(root: &Path) -> PathBuf {
+    root.join(".helmose").join("backup")
 }
 
 /// 保存笔记内容核心逻辑（可被集成测试直接调用，绕过 Tauri State）。
@@ -280,7 +286,7 @@ pub fn save_note_content_inner(
     note_id: &str,
     content: &str,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     use crate::services::indexer::incremental;
 
     // 1. 查 note 所属 vault + 相对路径
@@ -298,41 +304,42 @@ pub fn save_note_content_inner(
                 ))
             },
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("note {} not found", note_id))?;
     let (rel_path, root_path, vault_id) = row;
     let root = PathBuf::from(&root_path);
     let abs = root.join(&rel_path);
 
-    // 2. 备份原文件（若存在）。备份失败不阻塞写（磁盘满/权限时返回 Err 反而让用户无法保存），
-    //    但要 eprintln 留痕，绝不静默吞错（review 要求：log 不静默）。
+    // 2. 备份原文件（若存在）。守铁律 2「写 vault 必带备份保护」：
+    //    备份失败 = 无法保证可恢复 → 拒绝写，让用户显式选择（清理磁盘 / 改权限 / 放弃保存），
+    //    绝不「备份失败仍覆盖原文」——那会让原文丢失且无备份可恢复。
     if abs.exists() {
-        let backup_dir = root.join(".helmose").join("backup");
-        if let Err(e) = std::fs::create_dir_all(&backup_dir) {
-            tracing::warn!("备份目录创建失败 {}: {}", backup_dir.display(), e);
-        }
+        // canonicalize 兜底：防 vault 内 symlink 指向外部（fs::write 会跟随 symlink 写出 vault）
+        crate::utils::path_safety::assert_within(&abs, &root)?;
+        let backup_dir = backup_dir_of(&root);
+        std::fs::create_dir_all(&backup_dir)?;
         let safe_name = rel_path.replace('/', "_");
         let ts = crate::utils::dates::now_iso8601().replace(':', "-");
         let backup_path = backup_dir.join(format!("{}.{}.md", safe_name, ts));
-        if let Err(e) = std::fs::copy(&abs, &backup_path) {
-            tracing::warn!(
-                "备份失败 {} -> {}: {}",
+        std::fs::copy(&abs, &backup_path).map_err(|e| {
+            AppError::precondition_failed(format!(
+                "备份失败 {} -> {}：{}（已拒绝写入以保护原文，请清理磁盘或修正权限后重试）",
                 abs.display(),
                 backup_path.display(),
                 e
-            );
-        }
+            ))
+        })?;
     }
 
     // 3. 确保父目录存在，写新内容到 vault 原文
     if let Some(parent) = abs.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(&abs, content).map_err(|e| e.to_string())?;
+    std::fs::write(&abs, content)?;
 
     // 4. 增量重索引（notes + FTS + tasks + links 同步更新）
     incremental::upsert_rel(db, &vault_id, &rel_path, content, Some(&abs))
-        .map_err(|e| e.to_string())?;
+        ?;
 
     // 5. 返回最新 NoteContent：save 后 id 随 content_hash 变，按 (vault_id, rel_path) 查当前 id → fetch 全字段
     let new_id: String = db
@@ -342,7 +349,7 @@ pub fn save_note_content_inner(
             params![vault_id, rel_path],
             |r| r.get::<_, String>(0),
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("save 后未找到笔记：{}", rel_path))?;
     fetch_note_content(&new_id, db)
 }
@@ -354,7 +361,7 @@ pub fn save_note_content(
     note_id: String,
     content: String,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     save_note_content_inner(&note_id, &content, db.inner())
 }
 
@@ -364,7 +371,7 @@ pub fn save_note_content(
 /// （type/tags/created 全丢）。故读盘取原 fm → reassemble 拼回新正文 → 复用 save 链路
 /// （备份+写盘+索引），与 toggle_task / update_line 同构。返回 NoteContent.raw_content = 正文
 /// （与 get_note_content 一致，前端 RichEditor 可直接复用）。
-pub fn save_note_body_inner(note_id: &str, body: &str, db: &Database) -> Result<NoteContent, String> {
+pub fn save_note_body_inner(note_id: &str, body: &str, db: &Database) -> AppResult<NoteContent> {
     let full = read_full(note_id, db)?;
     let new_full = reassemble(&full, body);
     // save_note_content_inner 内部 upsert 后 fetch，返回完整 NoteContent
@@ -378,7 +385,7 @@ pub fn save_note_body(
     note_id: String,
     body: String,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     save_note_body_inner(&note_id, &body, db.inner())
 }
 
@@ -396,14 +403,15 @@ pub fn toggle_task_inner(
     source_line: i64,
     done: bool,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     // 读盘完整文件 + 取正文（去 fm，source_line 与之同源）——避免写回丢失 frontmatter
     let full = read_full(note_id, db)?;
     let body = body_of(&full);
 
     // M2：先查任务的 repeat_rule（只在 done=true 且任务为重复时走推进分支）。
     // 注：source_line 是相对正文的 1-based 行号；DB 也按 (note_id, source_line) 反查。
-    // query_row 返回 Result<Option<T>>，T=Option<String>（列可空）→ 三层 Option 拍平为 Option<String>。
+    // 封装层 query_row 返回 Result<Option<T>>（NoRows 已是 Ok(None)），T=Option<String>（列可空）→ 两层 Option。
+    // 真错误（锁/磁盘/语法）应上抛而非 .ok() 吞成 None——否则会把「查询失败」误判为「非重复任务」直接标完成（B6）。
     let repeat_rule: Option<String> = if done {
         db.sqlite()
             .query_row(
@@ -411,8 +419,7 @@ pub fn toggle_task_inner(
                 rusqlite::params![note_id, source_line as i32],
                 |r| r.get::<_, Option<String>>(0),
             )
-            .ok()
-            .flatten()
+            ?
             .flatten()
     } else {
         None
@@ -430,11 +437,11 @@ pub fn toggle_task_inner(
     let mut lines: Vec<String> = body.lines().map(String::from).collect();
     let idx = (source_line - 1) as usize;
     if idx >= lines.len() {
-        return Err(format!(
+        return Err(AppError::invalid_input(format!(
             "source_line {} 越界（正文共 {} 行）",
             source_line,
             lines.len()
-        ));
+        )));
     }
     lines[idx] = if done {
         // High#3：doing([/]) 勾选也算完成 → [x]（修 doing 勾选无效；与 set_task_status_inner 三态口径一致）
@@ -461,17 +468,17 @@ fn advance_repeat_task(
     full: &str,
     body: &str,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     use crate::utils::dates::{add_period, today_naive};
 
     let mut lines: Vec<String> = body.lines().map(String::from).collect();
     let idx = (source_line - 1) as usize;
     if idx >= lines.len() {
-        return Err(format!(
+        return Err(AppError::invalid_input(format!(
             "source_line {} 越界（正文共 {} 行）",
             source_line,
             lines.len()
-        ));
+        )));
     }
     let cur_line = lines[idx].clone();
 
@@ -503,7 +510,7 @@ pub fn toggle_task(
     source_line: i64,
     done: bool,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     toggle_task_inner(&note_id, source_line, done, db.inner())
 }
 
@@ -520,37 +527,37 @@ pub fn toggle_task(
 
 /// task status 白名单（todo/doing/done）。命令壳入口 + 单元测试共用。
 /// 非法值 → Err，避免 inner 走 `_ =>` 分支静默按 todo 兜底。
-fn validate_task_status(s: &str) -> Result<(), String> {
+fn validate_task_status(s: &str) -> AppResult<()> {
     if !["todo", "doing", "done"].contains(&s) {
-        return Err(format!("非法 status 值: {}（必须 todo/doing/done）", s));
+        return Err(AppError::invalid_input(format!("非法 status 值: {}（必须 todo/doing/done）", s)));
     }
     Ok(())
 }
 
 /// task urgency 白名单（三态：high/low 显式 + "" 清空；mid 仅前端 due_date 派生，不入 bullet）。
 /// 命令壳入口 + 单元测试共用。非法值（含 mid）→ Err，防前端误传 mid 静默清空 🔥（B1/S1）。
-fn validate_task_urgency(s: &str) -> Result<(), String> {
+fn validate_task_urgency(s: &str) -> AppResult<()> {
     if !["high", "low", ""].contains(&s) {
-        return Err(format!(
+        return Err(AppError::invalid_input(format!(
             "非法 urgency 值: {}（必须 high/low/空串；mid 仅前端派生，后端不接受）",
             s
-        ));
+        )));
     }
     Ok(())
 }
 
 /// task priority 范围（0-3）。命令壳入口 + 单元测试共用。
-fn validate_task_priority(p: i32) -> Result<(), String> {
+fn validate_task_priority(p: i32) -> AppResult<()> {
     if !(0..=3).contains(&p) {
-        return Err(format!("非法 priority 值: {}（必须 0-3）", p));
+        return Err(AppError::invalid_input(format!("非法 priority 值: {}（必须 0-3）", p)));
     }
     Ok(())
 }
 
 /// marking_style 白名单（"helmose"|"obsidian"）。命令壳入口校验，防前端误传非法值静默兜底。
-fn validate_marking_style(s: &str) -> Result<(), String> {
+fn validate_marking_style(s: &str) -> AppResult<()> {
     if !["helmose", "obsidian"].contains(&s) {
-        return Err(format!("非法 marking_style 值: {}（必须 helmose/obsidian）", s));
+        return Err(AppError::invalid_input(format!("非法 marking_style 值: {}（必须 helmose/obsidian）", s)));
     }
     Ok(())
 }
@@ -569,20 +576,20 @@ struct LineEdit {
 
 /// 通用拆行：按 1-based source_line 取该行，越界/source_line<=0 → Err。
 /// source_line==null（聚合 section 任务）由上层拦截，本函数仅处理 >0 的就地行。
-fn line_for_edit(note_id: &str, source_line: i64, db: &Database) -> Result<LineEdit, String> {
+fn line_for_edit(note_id: &str, source_line: i64, db: &Database) -> AppResult<LineEdit> {
     let full = read_full(note_id, db)?;
     let body = body_of(&full);
     let lines: Vec<String> = body.lines().map(String::from).collect();
     if source_line <= 0 {
-        return Err("该任务不支持改状态（聚合 section）".to_string());
+        return Err(AppError::invalid_input("该任务不支持改状态（聚合 section）"));
     }
     let idx = (source_line - 1) as usize;
     if idx >= lines.len() {
-        return Err(format!(
+        return Err(AppError::invalid_input(format!(
             "source_line {} 越界（正文共 {} 行）",
             source_line,
             lines.len()
-        ));
+        )));
     }
     let trailing_nl = body.ends_with('\n');
     Ok(LineEdit {
@@ -594,7 +601,7 @@ fn line_for_edit(note_id: &str, source_line: i64, db: &Database) -> Result<LineE
 }
 
 /// 把改后的行集合拼回完整文件（保留 frontmatter），交由 save_note_content_inner 收口。
-fn save_lines(note_id: &str, full: &str, lines: Vec<String>, trailing_nl: bool, db: &Database) -> Result<NoteContent, String> {
+fn save_lines(note_id: &str, full: &str, lines: Vec<String>, trailing_nl: bool, db: &Database) -> AppResult<NoteContent> {
     let mut new_body = lines.join("\n");
     if trailing_nl {
         new_body.push('\n');
@@ -612,7 +619,7 @@ pub fn set_task_status_inner(
     source_line: i64,
     status: &str,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     let mut le = line_for_edit(note_id, source_line, db)?;
     let idx = (source_line - 1) as usize;
 
@@ -655,7 +662,7 @@ pub fn set_task_priority_inner(
     priority: i32,
     marking_style: &str,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     let mut le = line_for_edit(note_id, source_line, db)?;
     let idx = (source_line - 1) as usize;
 
@@ -691,7 +698,7 @@ pub fn set_task_urgency_inner(
     urgency: &str,
     marking_style: &str,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     let mut le = line_for_edit(note_id, source_line, db)?;
     let idx = (source_line - 1) as usize;
 
@@ -723,7 +730,7 @@ pub fn set_task_status(
     source_line: i64,
     status: String,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     // 入口显式白名单校验：拒绝非法 status（防 inner 兜底静默成功）
     validate_task_status(&status)?;
     tracing::info!(note_id = %note_id, source_line, status = %status, "set_task_status 写回");
@@ -739,7 +746,7 @@ pub fn set_task_priority(
     priority: i32,
     marking_style: Option<String>,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     // 入口显式范围校验：拒绝非法 priority（防 inner clamp 静默兜底成功）
     validate_task_priority(priority)?;
     let style = marking_style.as_deref().unwrap_or("helmose");
@@ -757,7 +764,7 @@ pub fn set_task_urgency(
     urgency: String,
     marking_style: Option<String>,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     // 入口显式白名单校验：拒绝非法 urgency（防 inner 兜底静默成功）
     validate_task_urgency(&urgency)?;
     let style = marking_style.as_deref().unwrap_or("helmose");
@@ -777,7 +784,7 @@ pub fn migrate_task_markers_inner(
     marking_style: &str,
     dry_run: bool,
     db: &Database,
-) -> Result<MigratePreview, String> {
+) -> AppResult<MigratePreview> {
     use crate::services::indexer::tasks;
     use std::collections::HashMap;
 
@@ -872,7 +879,7 @@ pub fn migrate_task_markers(
     marking_style: String,
     dry_run: bool,
     db: State<'_, Database>,
-) -> Result<MigratePreview, String> {
+) -> AppResult<MigratePreview> {
     tracing::info!(
         plan_count = plans.len(),
         marking_style = %marking_style,
@@ -885,7 +892,7 @@ pub fn migrate_task_markers(
 /// 删除笔记核心逻辑：**软删除**——移到 <vault>/.helmose/trash/（可恢复），
 /// 不硬删 vault 原文；DB 行经 incremental::remove_rel 级联清除（FK CASCADE）。
 /// 铁律：用户动作触发 + 软删可恢复（比硬删安全）。
-pub fn delete_note_inner(note_id: &str, db: &Database) -> Result<String, String> {
+pub fn delete_note_inner(note_id: &str, db: &Database) -> AppResult<String> {
     use crate::services::indexer::incremental;
     let (rel_path, root_path, vault_id) = db
         .sqlite()
@@ -895,7 +902,7 @@ pub fn delete_note_inner(note_id: &str, db: &Database) -> Result<String, String>
             params![note_id],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("note {} not found", note_id))?;
     let root = PathBuf::from(&root_path);
     let abs = root.join(&rel_path);
@@ -912,16 +919,16 @@ pub fn delete_note_inner(note_id: &str, db: &Database) -> Result<String, String>
             target = trash.join(format!("{}.{}.{}.md", safe, ts, suffix));
         }
         dest = target.to_string_lossy().to_string();
-        std::fs::rename(&abs, &target).map_err(|e| e.to_string())?;
+        std::fs::rename(&abs, &target)?;
     }
     // DB 清行（remove_rel 删 notes + FTS delete；tasks/links/events/projects/tomorrow 经 FK CASCADE 清）
-    incremental::remove_rel(db, &vault_id, &rel_path).map_err(|e| e.to_string())?;
+    incremental::remove_rel(db, &vault_id, &rel_path)?;
     Ok(dest)
 }
 
 /// 删除笔记（软删除到 .helmose/trash，可恢复）。NoteView 删除按钮触发。
 #[tauri::command]
-pub fn delete_note(note_id: String, db: State<'_, Database>) -> Result<String, String> {
+pub fn delete_note(note_id: String, db: State<'_, Database>) -> AppResult<String> {
     delete_note_inner(&note_id, db.inner())
 }
 
@@ -932,34 +939,34 @@ pub fn create_note_inner(
     rel_path: &str,
     content: &str,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     use crate::services::indexer::incremental;
 
-    // 1. 路径防穿越：任一段为 .. 即拒
-    if rel_path
-        .split(|c| c == '/' || c == '\\')
-        .any(|c| c == "..")
-    {
-        return Err(format!("非法路径（含 ..）：{}", rel_path));
+    // 1. 路径防穿越：任一段为 .. 即拒（utils::path_safety 收口，与 note_move 同源）
+    if !crate::utils::path_safety::is_safe_rel(rel_path) {
+        return Err(AppError::invalid_input(format!("非法路径（含 ..）：{}", rel_path)));
     }
     // 2. 排除目录拒（upsert 会跳过，导致查 note_id 失败）
     if is_excluded_rel(rel_path) {
-        return Err(format!("目标在排除目录，无法索引：{}", rel_path));
+        return Err(AppError::invalid_input(format!("目标在排除目录，无法索引：{}", rel_path)));
     }
     let root = vault_root(vault_id, db)?;
     let abs = root.join(rel_path);
     // 3. 不覆盖已存在（前端应先查，已存在直接打开）
     if abs.exists() {
-        return Err(format!("文件已存在：{}", rel_path));
+        return Err(AppError::conflict(format!("文件已存在：{}", rel_path)));
     }
+    // 3.5 canonicalize 兜底（新建路径版）：防 vault 内 symlink 父目录指向 vault 外。
+    //     is_safe_rel 只防 `..` 字符串穿越，不防 symlink；assert_new_path_within 解析父目录真实路径校验。
+    crate::utils::path_safety::assert_new_path_within(&abs, &root)?;
     // 4. 建父目录 + 写
     if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&abs, content).map_err(|e| e.to_string())?;
+    std::fs::write(&abs, content)?;
     // 5. 增量索引（notes + FTS + tasks + links + events/projects 同步）
     incremental::upsert_rel(db, vault_id, rel_path, content, Some(&abs))
-        .map_err(|e| e.to_string())?;
+        ?;
     // 6. 查回 note_id（upsert 后 notes 表有行）→ fetch 完整 NoteContent（含 note_type/tags/frontmatter）
     let note_id: String = db
         .sqlite()
@@ -968,7 +975,7 @@ pub fn create_note_inner(
             params![vault_id, rel_path],
             |r| r.get::<_, String>(0),
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("索引后未找到新笔记：{}", rel_path))?;
     fetch_note_content(&note_id, db)
 }
@@ -980,14 +987,14 @@ pub fn create_note(
     rel_path: String,
     content: String,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     create_note_inner(&vault_id, &rel_path, &content, db.inner())
 }
 
 /// 今日笔记核心逻辑：07_决策与复盘/日志/YYYY-MM/YYYY-MM-DD.md。
 /// 已存在 → 返回其 NoteContent（不覆盖）；不存在 → 用日志模板创建。
 /// 供 TodayPage / 命令面板 / 键盘快捷键共用，DRY 路径与模板逻辑。
-pub fn create_today_note_inner(vault_id: &str, db: &Database) -> Result<NoteContent, String> {
+pub fn create_today_note_inner(vault_id: &str, db: &Database) -> AppResult<NoteContent> {
     let today = crate::utils::dates::today_iso(); // YYYY-MM-DD
     let month = &today[..7]; // YYYY-MM
     let rel_path = format!("07_决策与复盘/日志/{}/{}.md", month, today);
@@ -999,7 +1006,7 @@ pub fn create_today_note_inner(vault_id: &str, db: &Database) -> Result<NoteCont
             params![vault_id, &rel_path],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     if let Some((id, _rp, _raw)) = existing {
         // 已存在 → fetch 完整 NoteContent（含 note_type/tags/frontmatter）
         return fetch_note_content(&id, db);
@@ -1017,7 +1024,7 @@ pub fn create_today_note_inner(vault_id: &str, db: &Database) -> Result<NoteCont
 pub fn create_today_note(
     vault_id: String,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     create_today_note_inner(&vault_id, db.inner())
 }
 
@@ -1029,7 +1036,7 @@ pub fn create_today_note(
 // ============================================================
 
 /// 查 note 的 (rel_path, vault_root) —— 行级写入读盘共用。
-fn note_rel_and_root(note_id: &str, db: &Database) -> Result<(String, PathBuf), String> {
+fn note_rel_and_root(note_id: &str, db: &Database) -> AppResult<(String, PathBuf)> {
     let row = db
         .sqlite()
         .query_row(
@@ -1038,16 +1045,16 @@ fn note_rel_and_root(note_id: &str, db: &Database) -> Result<(String, PathBuf), 
             params![note_id],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("note {} not found", note_id))?;
     Ok((row.0, PathBuf::from(row.1)))
 }
 
 /// 读盘完整文件内容（含 frontmatter）。行级写入一律在「盘完整文件」上操作，
 /// 避免基于 DB raw_content（去 frontmatter 的正文）写回时丢失 frontmatter。
-fn read_full(note_id: &str, db: &Database) -> Result<String, String> {
+fn read_full(note_id: &str, db: &Database) -> AppResult<String> {
     let (rel, root) = note_rel_and_root(note_id, db)?;
-    std::fs::read_to_string(root.join(&rel)).map_err(|e| format!("读取文件失败：{}", e))
+    std::fs::read_to_string(root.join(&rel)).map_err(AppError::Io)
 }
 
 /// full 里正文起始字节偏移（去 frontmatter 块）。无 frontmatter → 0。
@@ -1098,17 +1105,17 @@ pub fn update_line_inner(
     source_line: i64,
     new_text: &str,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     let full = read_full(note_id, db)?;
     let body = body_of(&full);
     let mut lines: Vec<String> = body.lines().map(String::from).collect();
     let idx = (source_line - 1) as usize;
     if idx >= lines.len() {
-        return Err(format!(
+        return Err(AppError::invalid_input(format!(
             "source_line {} 越界（正文共 {} 行）",
             source_line,
             lines.len()
-        ));
+        )));
     }
     lines[idx] = new_text.to_string();
     let mut new_body = lines.join("\n");
@@ -1126,7 +1133,7 @@ pub fn update_line(
     source_line: i64,
     new_text: String,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     update_line_inner(&note_id, source_line, &new_text, db.inner())
 }
 
@@ -1136,17 +1143,17 @@ pub fn delete_line_inner(
     note_id: &str,
     source_line: i64,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     let full = read_full(note_id, db)?;
     let body = body_of(&full);
     let mut lines: Vec<String> = body.lines().map(String::from).collect();
     let idx = (source_line - 1) as usize;
     if idx >= lines.len() {
-        return Err(format!(
+        return Err(AppError::invalid_input(format!(
             "source_line {} 越界（正文共 {} 行）",
             source_line,
             lines.len()
-        ));
+        )));
     }
     lines.remove(idx);
     let mut new_body = lines.join("\n");
@@ -1163,7 +1170,7 @@ pub fn delete_line(
     note_id: String,
     source_line: i64,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     delete_line_inner(&note_id, source_line, db.inner())
 }
 
@@ -1175,23 +1182,23 @@ pub fn insert_line_after_inner(
     after_line: i64,
     text: &str,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     // 入口校验：与 line_for_edit 同口径拒绝 after_line<=0，避免 (0-1) as usize 绕回 usize::MAX 的隐式侥幸（H2）
     if after_line <= 0 {
-        return Err(format!(
+        return Err(AppError::invalid_input(format!(
             "note {} after_line {} 不合法（必须 >0；聚合 section 任务不支持插入）",
             note_id, after_line
-        ));
+        )));
     }
     let full = read_full(note_id, db)?;
     let body = body_of(&full);
     let mut lines: Vec<String> = body.lines().map(String::from).collect();
     let idx = (after_line - 1) as usize;
     if idx >= lines.len() {
-        return Err(format!(
+        return Err(AppError::invalid_input(format!(
             "note {} after_line {} 越界（正文共 {} 行）",
             note_id, after_line, lines.len()
-        ));
+        )));
     }
     lines.insert(idx + 1, text.to_string());
     let mut new_body = lines.join("\n");
@@ -1209,7 +1216,7 @@ pub fn insert_line_after(
     after_line: i64,
     text: String,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     insert_line_after_inner(&note_id, after_line, &text, db.inner())
 }
 
@@ -1245,8 +1252,8 @@ fn section_insert_index(lines: &[String], section: &str) -> Option<usize> {
         .position(|l| is_heading_named(l, section))?;
     let heading_level = heading_level_of(&lines[heading_idx])?;
     let mut end = lines.len();
-    for i in (heading_idx + 1)..lines.len() {
-        if let Some(lvl) = heading_level_of(&lines[i]) {
+    for (i, line) in lines.iter().enumerate().skip(heading_idx + 1) {
+        if let Some(lvl) = heading_level_of(line) {
             if lvl <= heading_level {
                 end = i;
                 break;
@@ -1254,8 +1261,11 @@ fn section_insert_index(lines: &[String], section: &str) -> Option<usize> {
         }
     }
     let mut last_non_empty = heading_idx;
-    for i in (heading_idx + 1)..end {
-        if !lines[i].trim().is_empty() {
+    for (i, line) in lines.iter().enumerate().skip(heading_idx + 1) {
+        if i >= end {
+            break;
+        }
+        if !line.trim().is_empty() {
             last_non_empty = i;
         }
     }
@@ -1272,7 +1282,7 @@ pub fn append_bullet_inner(
     text: &str,
     as_task: bool,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     let full = read_full(note_id, db)?;
     let body = body_of(&full);
     let mut lines: Vec<String> = body.lines().map(String::from).collect();
@@ -1303,7 +1313,7 @@ pub fn append_bullet(
     text: String,
     as_task: bool,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     append_bullet_inner(&note_id, &section, &text, as_task, db.inner())
 }
 
@@ -1355,7 +1365,7 @@ pub fn patch_frontmatter_inner(
     key: &str,
     value: serde_json::Value,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     let full = read_full(note_id, db)?;
     let mut lines: Vec<String> = full.lines().map(String::from).collect();
     let (fm_start, fm_end) = frontmatter_bounds(&lines)
@@ -1363,16 +1373,24 @@ pub fn patch_frontmatter_inner(
     let serialized = serialize_yaml_scalar(&value);
     let key_pat = format!("{}:", key);
     let mut found = false;
-    for i in (fm_start + 1)..fm_end {
-        let t = lines[i].trim_start();
-        if t.starts_with(&key_pat) {
-            let after = &t[key.len() + 1..];
-            // 精确 key（key 后是空格或行尾），避免误匹配 keyXxx
-            if after.is_empty() || after.starts_with(' ') {
-                lines[i] = format!("{}: {}", key, serialized);
-                found = true;
-                break;
+    for (i, line) in lines.iter_mut().enumerate().skip(fm_start + 1) {
+        if i >= fm_end {
+            break;
+        }
+        let hit = {
+            let t = line.trim_start();
+            if t.starts_with(&key_pat) {
+                let after = &t[key.len() + 1..];
+                // 精确 key（key 后是空格或行尾），避免误匹配 keyXxx
+                after.is_empty() || after.starts_with(' ')
+            } else {
+                false
             }
+        };
+        if hit {
+            *line = format!("{}: {}", key, serialized);
+            found = true;
+            break;
         }
     }
     if !found {
@@ -1392,7 +1410,7 @@ pub fn patch_frontmatter(
     key: String,
     value: serde_json::Value,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     patch_frontmatter_inner(&note_id, &key, value, db.inner())
 }
 
@@ -1400,13 +1418,14 @@ pub fn patch_frontmatter(
 /// - value=Some(v)：确保存在该 tag。v == tag_prefix → 无值 tag（mainline）；否则 `{tag_prefix}:{v}`。
 ///   同前缀旧值（`{tag_prefix}:*`）+ 精确 `{tag_prefix}` 先移除再插入，保证唯一。
 /// - value=None：移除该前缀所有 tag。
+///
 /// block-array 格式（`tags:\n  - a`）→ Err 提示手动编辑，不破坏原文。
 pub fn set_tag_inner(
     note_id: &str,
     tag_prefix: &str,
     value: Option<&str>,
     db: &Database,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     let full = read_full(note_id, db)?;
     let mut lines: Vec<String> = full.lines().map(String::from).collect();
     let (fm_start, fm_end) = frontmatter_bounds(&lines)
@@ -1436,10 +1455,9 @@ pub fn set_tag_inner(
             if after.is_empty() && idx + 1 < fm_end {
                 let next = lines[idx + 1].trim_start();
                 if next.starts_with("- ") {
-                    return Err(
-                        "frontmatter tags 为 block-array 格式，请手动编辑（本期仅支持 inline）"
-                            .to_string(),
-                    );
+                    return Err(AppError::invalid_input(
+                        "frontmatter tags 为 block-array 格式，请手动编辑（本期仅支持 inline）",
+                    ));
                 }
             }
             let arr = after.trim_start_matches('[').trim_end_matches(']');
@@ -1482,7 +1500,7 @@ pub fn set_tag(
     tag_prefix: String,
     value: Option<String>,
     db: State<'_, Database>,
-) -> Result<NoteContent, String> {
+) -> AppResult<NoteContent> {
     set_tag_inner(&note_id, &tag_prefix, value.as_deref(), db.inner())
 }
 
@@ -1491,14 +1509,14 @@ pub fn set_tag(
 pub fn list_backups(
     vault_id: String,
     db: State<'_, Database>,
-) -> Result<Vec<BackupInfo>, String> {
+) -> AppResult<Vec<BackupInfo>> {
     let root = vault_root(&vault_id, db.inner())?;
-    let backup_dir = root.join(".helmose").join("backup");
+    let backup_dir = backup_dir_of(&root);
     if !backup_dir.exists() {
         return Ok(vec![]);
     }
     let mut out: Vec<BackupInfo> = std::fs::read_dir(&backup_dir)
-        .map_err(|e| e.to_string())?
+        ?
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
@@ -1529,16 +1547,16 @@ pub fn delete_backup(
     vault_id: String,
     name: String,
     db: State<'_, Database>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
-        return Err(format!("非法备份名：{}", name));
+        return Err(AppError::invalid_input(format!("非法备份名：{}", name)));
     }
     let root = vault_root(&vault_id, db.inner())?;
-    let path = root.join(".helmose").join("backup").join(&name);
+    let path = backup_dir_of(&root).join(&name);
     if !path.exists() {
         return Ok(()); // 已不存在，幂等
     }
-    std::fs::remove_file(&path).map_err(|e| e.to_string())
+    std::fs::remove_file(&path).map_err(AppError::Io)
 }
 
 /// 列出 .helmose/trash 下的已删除笔记（软删除文件，可手动恢复/清理）。
@@ -1546,14 +1564,14 @@ pub fn delete_backup(
 pub fn list_trash(
     vault_id: String,
     db: State<'_, Database>,
-) -> Result<Vec<BackupInfo>, String> {
+) -> AppResult<Vec<BackupInfo>> {
     let root = vault_root(&vault_id, db.inner())?;
     let trash = root.join(".helmose").join("trash");
     if !trash.exists() {
         return Ok(vec![]);
     }
     let mut out: Vec<BackupInfo> = std::fs::read_dir(&trash)
-        .map_err(|e| e.to_string())?
+        ?
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
@@ -1578,28 +1596,44 @@ pub fn list_trash(
     Ok(out)
 }
 
-/// 清空 .helmose/trash（永久删除所有软删除的笔记）。返回清除文件数。
-#[tauri::command]
-pub fn clear_trash(
-    vault_id: String,
-    db: State<'_, Database>,
-) -> Result<i64, String> {
-    let root = vault_root(&vault_id, db.inner())?;
+/// 清空回收站核心逻辑（纯函数，可单测）。
+fn clear_trash_inner(vault_id: &str, db: &Database) -> AppResult<i64> {
+    let root = vault_root(vault_id, db)?;
     let trash = root.join(".helmose").join("trash");
     if !trash.exists() {
         return Ok(0);
     }
     let mut n = 0i64;
-    for entry in std::fs::read_dir(&trash).map_err(|e| e.to_string())? {
-        if let Ok(e) = entry {
-            let p = e.path();
-            if p.is_file() {
-                let _ = std::fs::remove_file(&p);
-                n += 1;
-            }
+    for entry in std::fs::read_dir(&trash)?.flatten() {
+        let p = entry.path();
+        if p.is_file() {
+            let _ = std::fs::remove_file(&p);
+            n += 1;
         }
     }
     Ok(n)
+}
+
+/// 清空 .helmose/trash（永久删除所有软删除的笔记）。返回清除文件数。
+/// 安防:dialog 二次确认——防 webview XSS 注入后 JS 一键清空回收站
+/// （软删可恢复的最后一道防线;用户须主动确认,XSS 调用时弹窗会被用户察觉拒绝）。
+#[tauri::command]
+pub fn clear_trash(
+    app: tauri::AppHandle,
+    vault_id: String,
+    db: State<'_, Database>,
+) -> AppResult<i64> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+    let confirmed = app
+        .dialog()
+        .message("此操作将永久删除回收站中的所有笔记，且不可恢复。确认继续？")
+        .title("确认清空回收站")
+        .kind(MessageDialogKind::Warning)
+        .blocking_show();
+    if !confirmed {
+        return Ok(0);
+    }
+    clear_trash_inner(&vault_id, db.inner())
 }
 
 /// 取某日的「明日一句」（前一日日志写下的次日寄语）。无则 None。
@@ -1608,7 +1642,7 @@ pub fn get_tomorrow_sentence(
     vault_id: String,
     date_iso: String,
     db: State<'_, Database>,
-) -> Result<Option<String>, String> {
+) -> AppResult<Option<String>> {
     let s: Option<String> = db
         .sqlite()
         .query_row(
@@ -1617,7 +1651,7 @@ pub fn get_tomorrow_sentence(
             params![vault_id, date_iso],
             |r| r.get::<_, String>(0),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(s)
 }
 
@@ -1626,7 +1660,7 @@ pub fn get_tomorrow_sentence(
 pub fn get_backlinks(
     note_id: String,
     db: State<'_, Database>,
-) -> Result<Vec<crate::models::Backlink>, String> {
+) -> AppResult<Vec<crate::models::Backlink>> {
     use crate::models::Backlink;
     let rows = db
         .sqlite()
@@ -1657,7 +1691,7 @@ pub fn get_backlinks(
                 })
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -1672,7 +1706,7 @@ pub fn get_backlinks(
 pub fn get_forward_links(
     note_id: String,
     db: State<'_, Database>,
-) -> Result<Vec<crate::models::Backlink>, String> {
+) -> AppResult<Vec<crate::models::Backlink>> {
     use crate::models::Backlink;
     let rows = db
         .sqlite()
@@ -1717,7 +1751,7 @@ pub fn get_forward_links(
                 })
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -1727,7 +1761,7 @@ pub fn get_graph_data(
     vault_id: String,
     limit: Option<i64>,
     db: State<'_, Database>,
-) -> Result<crate::models::GraphData, String> {
+) -> AppResult<crate::models::GraphData> {
     use crate::models::{GraphData, GraphEdge, GraphNode};
     use std::collections::{HashMap, HashSet};
 
@@ -1742,7 +1776,7 @@ pub fn get_graph_data(
             params![vault_id],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
 
     // 按度数取 top N 节点
     let mut degree: HashMap<String, usize> = HashMap::new();
@@ -1785,7 +1819,7 @@ pub fn get_graph_data(
                     note_type: row.get(2)?,
                 })
             })
-            .map_err(|e| e.to_string())?
+            ?
     };
 
     Ok(GraphData { nodes, edges })
@@ -1812,10 +1846,11 @@ fn render_markdown(md: &str) -> String {
 static RE_WIKILINK_RENDER: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]").unwrap());
 
-/// HTML 属性值转义（防注入 / 防破坏 data-target 引号）
+/// HTML 属性值转义（防注入 / 防破坏 data-target 引号；纵深层补 ' 防单引号属性边界）
 fn esc_attr(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('"', "&quot;")
+        .replace('\'', "&#39;")
         .replace('<', "&lt;")
 }
 
@@ -2470,7 +2505,7 @@ mod tests {
             .find(|l| l.trim_start().starts_with("tags:"))
             .unwrap_or("");
         assert!(
-            !tags_line.split(|c: char| c == ',' || c == '[' || c == ']')
+            !tags_line.split([',', '[', ']'])
                 .any(|s| s.trim() == "mainline"),
             "mainline 应已移除：{}",
             tags_line
@@ -2607,7 +2642,7 @@ mod tests {
     }
 
     #[test]
-    fn set_task_priority_inner_helmose模式_写priorityN与清空() {
+    fn set_task_priority_inner_helmose模式_写priority_n与清空() {
         let (_tmp, vault_dir, db, note_id) =
             setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
         let line = source_line_of(&db, "任务");
@@ -2704,8 +2739,8 @@ mod tests {
         assert!(validate_task_status("done").is_ok());
         // 非法值
         let err = validate_task_status("bad").expect_err("非法 status 应 Err");
-        assert!(err.contains("非法 status"), "Err 文案应含「非法 status」: {}", err);
-        assert!(err.contains("bad"), "Err 文案应含原值: {}", err);
+        assert!(err.to_string().contains("非法 status"), "Err 文案应含「非法 status」: {}", err);
+        assert!(err.to_string().contains("bad"), "Err 文案应含原值: {}", err);
         // 大小写敏感（避免 silent 兜底；前端契约小写）
         assert!(validate_task_status("TODO").is_err(), "大写应拒（前端契约小写）");
         assert!(validate_task_status("").is_err(), "空串应拒");
@@ -2720,10 +2755,10 @@ mod tests {
         assert!(validate_task_urgency("").is_ok(), "空串=清空语义，应通过");
         // mid 仅前端 due_date 派生，后端拒绝（防误传 mid 静默清空 🔥，B1/S1）
         let mid_err = validate_task_urgency("mid").expect_err("mid 应被后端拒绝");
-        assert!(mid_err.contains("mid"), "Err 应说明 mid 不接受: {}", mid_err);
+        assert!(mid_err.to_string().contains("mid"), "Err 应说明 mid 不接受: {}", mid_err);
         let err = validate_task_urgency("urgent").expect_err("非法 urgency 应 Err");
-        assert!(err.contains("非法 urgency"), "Err 文案应含「非法 urgency」: {}", err);
-        assert!(err.contains("urgent"), "Err 应含原值");
+        assert!(err.to_string().contains("非法 urgency"), "Err 文案应含「非法 urgency」: {}", err);
+        assert!(err.to_string().contains("urgent"), "Err 应含原值");
         assert!(validate_task_urgency("HIGH").is_err(), "大写应拒");
     }
 
@@ -2733,7 +2768,7 @@ mod tests {
         assert!(validate_marking_style("helmose").is_ok());
         assert!(validate_marking_style("obsidian").is_ok());
         let err = validate_marking_style("OB").expect_err("非法 style 应 Err");
-        assert!(err.contains("非法 marking_style"), "{}", err);
+        assert!(err.to_string().contains("非法 marking_style"), "{}", err);
         assert!(validate_marking_style("Helmose").is_err(), "大写应拒");
         assert!(validate_marking_style("").is_err(), "空串应拒");
     }
@@ -2747,8 +2782,8 @@ mod tests {
         }
         // 越界
         let err = validate_task_priority(-1).expect_err("priority=-1 应 Err");
-        assert!(err.contains("非法 priority"), "Err 应含「非法 priority」: {}", err);
-        assert!(err.contains("-1"), "Err 应含原值");
+        assert!(err.to_string().contains("非法 priority"), "Err 应含「非法 priority」: {}", err);
+        assert!(err.to_string().contains("-1"), "Err 应含原值");
         assert!(validate_task_priority(4).is_err(), "priority=4 应 Err");
         assert!(validate_task_priority(100).is_err(), "priority=100 应 Err");
         assert!(validate_task_priority(i32::MIN).is_err(), "i32::MIN 应 Err");
@@ -2849,9 +2884,9 @@ mod tests {
         let (_tmp, _vault_dir, db, note_id) =
             setup_line_vault("# T\n\n## 今日待办\n- [ ] 任务\n");
         let err = insert_line_after_inner(&note_id, 0, "- [ ] 子", &db).expect_err("after_line=0 应 Err");
-        assert!(err.contains("不合法"), "应拒绝 after_line<=0: {}", err);
+        assert!(err.to_string().contains("不合法"), "应拒绝 after_line<=0: {}", err);
         let err2 = insert_line_after_inner(&note_id, -3, "- [ ] 子", &db).expect_err("负数应 Err");
-        assert!(err2.contains("不合法"));
+        assert!(err2.to_string().contains("不合法"));
         let _ = std::fs::remove_dir_all(&_vault_dir);
     }
 }

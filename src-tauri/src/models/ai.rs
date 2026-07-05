@@ -46,6 +46,17 @@ impl Default for AiSettings {
     }
 }
 
+/// AI 配置对外视图（不含 key）：get_ai_settings 返此类型给前端。
+/// key 通过 set_api_key 单独命令写，永不全量回读——防 XSS 窃取（webview 被注入即可读
+/// devtools / Form state 里的明文 key）+ devtools 长时暴露。has_key 由后端按 api_key 是否
+/// 为空计算，供前端「已配置/未配置」状态展示。
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AiSettingsView {
+    pub provider: String,
+    pub has_key: bool,
+    pub enabled: bool,
+}
+
 /// AI 主线判定结果。
 /// - source="ai"：LLM 调用成功
 /// - source="heuristic"：LLM 失败/key 空，退本地启发式（projects top-3）

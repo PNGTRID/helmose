@@ -22,9 +22,9 @@
         "fullscreen": false
       }
     ],
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "security": {
-      "csp": null
+      "csp": "default-src 'self' ipc: http://ipc.localhost; base-uri 'none'; form-action 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; script-src 'self'; object-src 'none'; frame-src 'none'"
     }
   },
   "bundle": {
@@ -45,7 +45,6 @@
     "fs": {
       "requireLiteralLeadingDot": false
     },
-    "opener": {},
     "updater": {
       "pubkey": "TODO_REPLACE_AT_RELEASE",
       "endpoints": ["https://TODO_REPLACE_AT_RELEASE/latest"]

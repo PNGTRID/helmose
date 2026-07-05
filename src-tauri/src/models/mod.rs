@@ -3,6 +3,7 @@
 // ============================================================
 
 pub mod ai;
+pub mod error;
 pub mod event;
 pub mod life_state;
 pub mod note;
@@ -14,7 +15,8 @@ pub mod scaffold;
 pub mod task;
 pub mod vault;
 
-pub use ai::{AiCoachResult, AiMainline, AiSettings, AiTomorrowResult};
+pub use ai::{AiCoachResult, AiMainline, AiSettings, AiSettingsView, AiTomorrowResult};
+pub use error::{AppError, AppResult};
 pub use event::Event;
 pub use life_state::AgentExport;
 pub use note::{Backlink, GraphData, GraphEdge, GraphNode, Note, NoteContent, NoteMeta, SearchResult};

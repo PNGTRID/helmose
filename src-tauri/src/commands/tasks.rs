@@ -1,6 +1,6 @@
 // 任务查询命令
 
-use crate::models::Task;
+use crate::models::{AppResult, Task};
 use crate::services::Database;
 use tauri::State;
 
@@ -37,7 +37,7 @@ pub fn get_tasks(
     priority_min: Option<i32>,
     limit: Option<i64>,
     db: State<'_, Database>,
-) -> Result<Vec<Task>, String> {
+) -> AppResult<Vec<Task>> {
     let mut sql = String::from(
         "SELECT id,note_id,vault_id,text,done,due_date,source,source_line,project_id,created_at,completed_at,status,priority,urgency,repeat_rule,parent_task_id \
          FROM tasks WHERE vault_id = ?1",
@@ -80,6 +80,6 @@ pub fn get_tasks(
     let rows = db
         .sqlite()
         .query_map(&sql, &pv, row_to_task)
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }

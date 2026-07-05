@@ -132,8 +132,8 @@ fn file_stem_of(file_name: &str) -> String {
 fn extract_h1(content: &str) -> Option<String> {
     for line in content.lines() {
         let t = line.trim_start();
-        if t.starts_with("# ") {
-            return Some(t[2..].trim().to_string());
+        if let Some(rest) = t.strip_prefix("# ") {
+            return Some(rest.trim().to_string());
         }
     }
     None

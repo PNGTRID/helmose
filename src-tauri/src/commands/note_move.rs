@@ -16,18 +16,14 @@
 // 铁律：本命令只移动本笔记自己的原文 + 同步索引；不批量改其他笔记的路径型引用
 //      （那是 apply_ref_updates 的事，需用户二次授权）。
 
-use crate::models::{MoveResult, RefLoc};
+use crate::models::{AppError, AppResult, MoveResult, RefLoc};
 use crate::services::Database;
 use crate::utils::exclude::is_excluded;
+use crate::utils::path_safety::is_safe_rel;
 use regex::Regex;
 use rusqlite::params;
 use std::path::PathBuf;
 use tauri::State;
-
-/// 路径安全校验：任一段为 `..` 即拒。返回 true 表示安全。
-fn is_safe_rel(rel: &str) -> bool {
-    !rel.split(|c| c == '/' || c == '\\').any(|c| c == "..")
-}
 
 /// 行内是否含「路径型引用」的链接形式。覆盖三种写法：
 ///   ① markdown inline link：`[text](old)` / `[text](old "title")`
@@ -98,7 +94,7 @@ fn replace_path_refs(line: &str, old: &str, new: &str) -> String {
 fn fetch_note_loc(
     note_id: &str,
     db: &Database,
-) -> Result<(String, String, String, String), String> {
+) -> AppResult<(String, String, String, String)> {
     let row = db
         .sqlite()
         .query_row(
@@ -114,7 +110,7 @@ fn fetch_note_loc(
                 ))
             },
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("note {} not found", note_id))?;
     Ok(row)
 }
@@ -135,7 +131,7 @@ fn detect_path_refs(
     old_path: &str,
     new_path: &str,
     db: &Database,
-) -> Result<Vec<RefLoc>, String> {
+) -> AppResult<Vec<RefLoc>> {
     let rows: Vec<(String, String)> = db
         .sqlite()
         .query_map(
@@ -144,7 +140,7 @@ fn detect_path_refs(
             params![vault_id, note_id, format!("%{}%", old_path)],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let mut refs = Vec::new();
     for (nid, content) in rows {
         for (i, line) in content.lines().enumerate() {
@@ -168,7 +164,7 @@ pub fn move_note_inner(
     note_id: &str,
     target_dir: &str,
     db: &Database,
-) -> Result<MoveResult, String> {
+) -> AppResult<MoveResult> {
     move_or_rename(note_id, Some(target_dir), None, db)
 }
 
@@ -178,7 +174,7 @@ pub fn rename_note_inner(
     note_id: &str,
     new_file_name: &str,
     db: &Database,
-) -> Result<MoveResult, String> {
+) -> AppResult<MoveResult> {
     move_or_rename(note_id, None, Some(new_file_name), db)
 }
 
@@ -188,7 +184,7 @@ fn move_or_rename(
     target_dir: Option<&str>,
     new_file_name: Option<&str>,
     db: &Database,
-) -> Result<MoveResult, String> {
+) -> AppResult<MoveResult> {
     use crate::services::indexer::incremental;
 
     let (old_rel, old_file_name, root_path, vault_id) = fetch_note_loc(note_id, db)?;
@@ -214,39 +210,39 @@ fn move_or_rename(
 
     // 路径校验
     if !is_safe_rel(&new_rel) {
-        return Err(format!("非法路径（含 ..）：{}", new_rel));
+        return Err(AppError::invalid_input(format!("非法路径（含 ..）：{}", new_rel)));
     }
     let new_abs = root.join(&new_rel);
     if is_excluded(&new_abs, &root) {
-        return Err(format!("目标在排除目录，无法索引：{}", new_rel));
+        return Err(AppError::invalid_input(format!("目标在排除目录，无法索引：{}", new_rel)));
     }
     if new_abs == root.join(&old_rel) {
         return Err("新旧路径相同".into());
     }
     if new_abs.exists() {
-        return Err(format!("目标已存在：{}", new_rel));
+        return Err(AppError::conflict(format!("目标已存在：{}", new_rel)));
     }
 
     // fs::rename 移动 vault 原文（移动本笔记自己的原文）
     let old_abs = root.join(&old_rel);
     if !old_abs.exists() {
-        return Err(format!(
+        return Err(AppError::precondition_failed(format!(
             "源文件不存在（可能已被外部移动）：{}",
             old_rel
-        ));
+        )));
     }
     if let Some(parent) = new_abs.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(parent)?;
     }
-    std::fs::rename(&old_abs, &new_abs).map_err(|e| e.to_string())?;
+    std::fs::rename(&old_abs, &new_abs)?;
 
     // 索引同步：先删旧 rel_path 行（含外键级联派生），再 upsert 新 rel_path。
     // 必须按此顺序——若先 upsert，旧/新同 content_hash 会触发碰撞消歧（hash#short），
     // 导致 id 漂移。先 remove 旧 → upsert 新 → id 稳定（content_hash 不变）。
-    incremental::remove_rel(db, &vault_id, &old_rel).map_err(|e| e.to_string())?;
-    let content = std::fs::read_to_string(&new_abs).map_err(|e| e.to_string())?;
+    incremental::remove_rel(db, &vault_id, &old_rel)?;
+    let content = std::fs::read_to_string(&new_abs)?;
     incremental::upsert_rel(db, &vault_id, &new_rel, &content, Some(&new_abs))
-        .map_err(|e| e.to_string())?;
+        ?;
 
     // 重索引会按 content_hash 重新计算 id；若 id 不变（常规），重查当前 id；
     // 若碰撞态切换，旧 note_id 行会被 upsert 替换，这里查新位置拿最新 id。
@@ -257,7 +253,7 @@ fn move_or_rename(
             params![vault_id, new_rel],
             |r| r.get::<_, String>(0),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let final_id = current_id.unwrap_or_else(|| note_id.to_string());
 
     // 检测路径型引用（其他笔记里的 `[x](旧路径)` / `[[旧路径]]`）
@@ -277,7 +273,7 @@ pub fn move_note(
     note_id: String,
     target_dir: String,
     db: State<'_, Database>,
-) -> Result<MoveResult, String> {
+) -> AppResult<MoveResult> {
     let r = move_note_inner(&note_id, &target_dir, db.inner())?;
     // 审计：vault 写操作留轨迹（old→new + 检测到的路径型引用数，便于排障/回溯）
     tracing::info!(
@@ -296,7 +292,7 @@ pub fn rename_note(
     note_id: String,
     new_file_name: String,
     db: State<'_, Database>,
-) -> Result<MoveResult, String> {
+) -> AppResult<MoveResult> {
     let r = rename_note_inner(&note_id, &new_file_name, db.inner())?;
     tracing::info!(
         note_id = %note_id,
@@ -320,21 +316,21 @@ pub fn rename_note(
 /// .trash 被排除目录契约保护（隐藏目录 `.` 开头，见 utils/exclude.rs），
 /// watcher 不会把移过去的文件重新索引回来——否则删除会失效。
 /// 返回 .trash 内的相对路径（前端提示用）。
-pub fn move_to_trash_inner(note_id: &str, db: &Database) -> Result<String, String> {
+pub fn move_to_trash_inner(note_id: &str, db: &Database) -> AppResult<String> {
     use crate::services::indexer::incremental;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let (old_rel, _file_name, root_path, vault_id) = fetch_note_loc(note_id, db)?;
     if !is_safe_rel(&old_rel) {
-        return Err(format!("非法路径（含 ..）：{}", old_rel));
+        return Err(AppError::invalid_input(format!("非法路径（含 ..）：{}", old_rel)));
     }
     let root = PathBuf::from(&root_path);
     let old_abs = root.join(&old_rel);
     if !old_abs.exists() {
-        return Err(format!(
+        return Err(AppError::precondition_failed(format!(
             "源文件不存在（可能已被外部移动/删除）：{}",
             old_rel
-        ));
+        )));
     }
 
     // .trash 目标：保留原 rel 结构便于用户从回收站还原到原位置。
@@ -359,19 +355,19 @@ pub fn move_to_trash_inner(note_id: &str, db: &Database) -> Result<String, Strin
     }
 
     if let Some(parent) = trash_abs.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(parent)?;
     }
-    std::fs::rename(&old_abs, &trash_abs).map_err(|e| e.to_string())?;
+    std::fs::rename(&old_abs, &trash_abs)?;
 
     // 从索引移除（外键级联清派生表）。.trash 已被排除契约挡在索引之外。
-    incremental::remove_rel(db, &vault_id, &old_rel).map_err(|e| e.to_string())?;
+    incremental::remove_rel(db, &vault_id, &old_rel)?;
 
     Ok(trash_rel)
 }
 
 /// 移笔记到回收站（命令壳）。
 #[tauri::command]
-pub fn move_to_trash(note_id: String, db: State<'_, Database>) -> Result<String, String> {
+pub fn move_to_trash(note_id: String, db: State<'_, Database>) -> AppResult<String> {
     let trash_rel = move_to_trash_inner(&note_id, db.inner())?;
     tracing::info!(note_id = %note_id, trash_rel = %trash_rel, "move_to_trash 完成");
     Ok(trash_rel)
@@ -386,7 +382,7 @@ pub fn move_to_trash(note_id: String, db: State<'_, Database>) -> Result<String,
 pub fn apply_ref_updates(
     ref_locations: Vec<RefLoc>,
     db: State<'_, Database>,
-) -> Result<usize, String> {
+) -> AppResult<usize> {
     apply_ref_updates_inner(&ref_locations, db.inner())
 }
 
@@ -395,7 +391,7 @@ pub fn apply_ref_updates(
 pub fn apply_ref_updates_inner(
     ref_locations: &[RefLoc],
     db: &Database,
-) -> Result<usize, String> {
+) -> AppResult<usize> {
     use crate::commands::library::save_note_content_inner;
 
     if ref_locations.is_empty() {
@@ -418,7 +414,7 @@ pub fn apply_ref_updates_inner(
                 params![note_id],
                 |r| r.get::<_, String>(0),
             )
-            .map_err(|e| e.to_string())?
+            ?
             .ok_or_else(|| format!("note {} not found", note_id))?;
 
         // 按行替换：定位 line（1-based），仅该行内把 old_path 的链接形式 → new_path。
@@ -613,7 +609,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let err = move_note_inner(&id, "sub", &db).unwrap_err();
-        assert!(err.contains("目标已存在"), "错误信息应含「目标已存在」：{}", err);
+        assert!(err.to_string().contains("目标已存在"), "错误信息应含「目标已存在」：{}", err);
         let _ = &_tmp;
     }
 
@@ -629,7 +625,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let err = move_note_inner(&id, "../escape", &db).unwrap_err();
-        assert!(err.contains("非法路径"), "应拒绝路径穿越：{}", err);
+        assert!(err.to_string().contains("非法路径"), "应拒绝路径穿越：{}", err);
         let _ = &_tmp;
     }
 

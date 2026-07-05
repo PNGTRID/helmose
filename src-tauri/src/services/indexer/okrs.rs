@@ -84,7 +84,7 @@ pub fn extract(parsed: &ParsedNote) -> Vec<ExtractedOkr> {
             .or_else(|| {
                 sec.body
                     .lines()
-                    .find_map(|l| parse_quarter(l))
+                    .find_map(parse_quarter)
             });
 
         for (i, line) in sec.body.lines().enumerate() {

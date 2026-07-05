@@ -1,5 +1,6 @@
 // 索引命令：全量索引 vault（遍历 .md → 解析 → 写库）
 
+use crate::models::{AppError, AppResult};
 use crate::services::indexer;
 use crate::services::Database;
 use crate::utils::exclude::is_excluded;
@@ -19,7 +20,7 @@ pub struct IndexStats {
     pub elapsed_ms: u64,
 }
 
-fn vault_root(vault_id: &str, db: &Database) -> Result<PathBuf, String> {
+fn vault_root(vault_id: &str, db: &Database) -> AppResult<PathBuf> {
     let path = db
         .sqlite()
         .query_row(
@@ -27,13 +28,13 @@ fn vault_root(vault_id: &str, db: &Database) -> Result<PathBuf, String> {
             params![vault_id],
             |row| row.get::<_, String>(0),
         )
-        .map_err(|e| e.to_string())?;
-    path.ok_or_else(|| format!("vault {} not found", vault_id))
+        ?;
+    path.ok_or_else(|| AppError::not_found(format!("vault {} not found", vault_id)))
         .map(PathBuf::from)
 }
 
 /// 全量索引核心逻辑（可被集成测试直接调用，绕过 Tauri State）。行为零变化。
-pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, String> {
+pub fn index_vault_inner(vault_id: &str, db: &Database) -> AppResult<IndexStats> {
     let started = std::time::Instant::now();
     let root = vault_root(vault_id, db)?;
 
@@ -375,14 +376,14 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
             Ok(())
         })
         .map_err(|e: rusqlite::Error| {
-            eprintln!(
-                "[index_vault] FAILED root={} parsed={} notes tasks_so_far={}: {:?}",
+            tracing::error!(
+                "[index_vault] FAILED root={} parsed={} tasks_so_far={}: {}",
                 root.display(),
                 parsed.len(),
                 stats.tasks,
                 e
             );
-            e.to_string()
+            AppError::from(e)
         })?;
 
     stats.elapsed_ms = started.elapsed().as_millis() as u64;
@@ -395,26 +396,54 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> Result<IndexStats, St
     Ok(stats)
 }
 
-/// 全量索引一个 vault（Tauri 命令壳：仅 State 解包 + 转调 index_vault_inner，行为零变化）
+/// 全量索引一个 vault（async + spawn_blocking）：1.9 万文件遍历 + 大事务丢到阻塞线程池，
+/// 不占 Tauri async 命令线程槽（其他 async 命令仍可调度）。index_vault_inner 保留同步签名 +
+/// 单事务原子性（全成功或全失败回滚）——不拆分批 commit，避免破坏 DELETE + INSERT + FTS rebuild
+/// + apply_global_passes 的顺序依赖导致半成品索引。emit 开始/完成事件供前端显示进度
+///（中间逐 N 篇进度需贯穿 inner 签名，标 backlog）。
 #[tauri::command]
-pub fn index_vault(vault_id: String, db: State<'_, Database>) -> Result<IndexStats, String> {
-    index_vault_inner(&vault_id, db.inner())
+pub async fn index_vault(
+    vault_id: String,
+    app: tauri::AppHandle,
+    db: State<'_, Database>,
+) -> AppResult<IndexStats> {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "index-progress",
+        serde_json::json!({ "vault_id": &vault_id, "phase": "started" }),
+    );
+    let db = db.inner().clone();
+    let vid = vault_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || index_vault_inner(&vid, &db))
+        .await
+        .map_err(|e| AppError::Internal(format!("索引任务调度失败：{}", e)))?;
+    let _ = app.emit(
+        "index-progress",
+        serde_json::json!({
+            "vault_id": &vault_id,
+            "phase": "done",
+            "ok": result.is_ok()
+        }),
+    );
+    result
 }
 
-/// 启动文件监听（增量索引）。前端 vault 就绪后调用，幂等（v0.1 单 vault）。
+/// 启动文件监听（增量索引）。前端 vault 就绪后调用，幂等（已有 watcher 先停再起新）。
+/// 经 WatcherManager 管理生命周期：reset_app / delete_vault 会调 stop / stop_if_watching，
+/// 防 reset 后旧 watcher 把删除事件往已清空的 DB 写回（数据回潮）。
 #[tauri::command]
 pub fn start_watcher(
     vault_id: String,
     app: tauri::AppHandle,
     db: State<'_, Database>,
-) -> Result<(), String> {
+    wm: State<'_, crate::services::watcher::WatcherManager>,
+) -> AppResult<()> {
     let root = vault_root(&vault_id, db.inner())?;
-    crate::services::watcher::start(app, db.inner().clone(), vault_id, root);
-    Ok(())
+    wm.inner().start(app, db.inner().clone(), vault_id, root)
 }
 
 /// 检测是否需要重新索引的核心逻辑（可被集成测试直接调用）。行为零变化。
-pub fn should_reindex_inner(vault_id: &str, db: &Database) -> Result<bool, String> {
+pub fn should_reindex_inner(vault_id: &str, db: &Database) -> AppResult<bool> {
     let root = vault_root(vault_id, db)?;
     let mut disk = 0usize;
     for entry in WalkDir::new(&root)
@@ -437,7 +466,7 @@ pub fn should_reindex_inner(vault_id: &str, db: &Database) -> Result<bool, Strin
             params![vault_id],
             |r| r.get(0),
         )
-        .map_err(|e| e.to_string())?
+        ?
         .unwrap_or(0);
 
     if notes_count == 0 {
@@ -450,7 +479,7 @@ pub fn should_reindex_inner(vault_id: &str, db: &Database) -> Result<bool, Strin
 /// 检测是否需要重新索引：磁盘 md 数与 notes 表数差异 >10%，或 notes 为 0。
 /// 用于启动时自动追赶「磁盘已变但索引未更新」（如 vault 重构后没重新索引）。
 #[tauri::command]
-pub fn should_reindex(vault_id: String, db: State<'_, Database>) -> Result<bool, String> {
+pub fn should_reindex(vault_id: String, db: State<'_, Database>) -> AppResult<bool> {
     should_reindex_inner(&vault_id, db.inner())
 }
 

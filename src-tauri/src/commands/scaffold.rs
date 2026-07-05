@@ -4,7 +4,7 @@
 // 复用 services::contract 的目录/type 契约。详见 design vault-paradigm-scaffold Component 4。
 // ============================================================
 
-use crate::models::ScaffoldStats;
+use crate::models::{AppResult, ScaffoldStats};
 use crate::services::contract;
 use std::fs;
 use std::path::Path;
@@ -114,11 +114,11 @@ fn template_readme() -> String {
 }
 
 /// 脚手架核心逻辑（命令壳子转调它，便于单测）
-fn scaffold_inner(target_path: &str) -> Result<ScaffoldStats, String> {
+fn scaffold_inner(target_path: &str) -> AppResult<ScaffoldStats> {
     let root = Path::new(target_path);
 
     if !root.exists() {
-        fs::create_dir_all(root).map_err(|e| e.to_string())?;
+        fs::create_dir_all(root)?;
     }
     if !is_empty_dir(root) {
         if looks_like_vault(root) {
@@ -132,7 +132,7 @@ fn scaffold_inner(target_path: &str) -> Result<ScaffoldStats, String> {
 
     // 1. 00~09 顶层目录骨架
     for dir in contract::TOP_LEVEL_DIRS {
-        fs::create_dir_all(root.join(dir)).map_err(|e| e.to_string())?;
+        fs::create_dir_all(root.join(dir))?;
         dirs_created += 1;
     }
 
@@ -140,17 +140,17 @@ fn scaffold_inner(target_path: &str) -> Result<ScaffoldStats, String> {
     for t in contract::NOTE_TYPES {
         if let Some(dir) = contract::type_to_dir(t) {
             let abs_dir = root.join(dir);
-            fs::create_dir_all(&abs_dir).map_err(|e| e.to_string())?;
+            fs::create_dir_all(&abs_dir)?;
             let tmpl_path = abs_dir.join(format!("{}-模板.md", t));
-            fs::write(&tmpl_path, type_template(t, dir)).map_err(|e| e.to_string())?;
+            fs::write(&tmpl_path, type_template(t, dir))?;
             templates_created += 1;
         }
     }
 
     // 3. 根目录 规范.md / 目录.md / README.md
-    fs::write(root.join("规范.md"), template_spec()).map_err(|e| e.to_string())?;
-    fs::write(root.join("目录.md"), template_index()).map_err(|e| e.to_string())?;
-    fs::write(root.join("README.md"), template_readme()).map_err(|e| e.to_string())?;
+    fs::write(root.join("规范.md"), template_spec())?;
+    fs::write(root.join("目录.md"), template_index())?;
+    fs::write(root.join("README.md"), template_readme())?;
 
     Ok(ScaffoldStats {
         root_path: target_path.to_string(),
@@ -163,7 +163,7 @@ fn scaffold_inner(target_path: &str) -> Result<ScaffoldStats, String> {
 /// 新建知识库骨架（onboarding「创建我的知识库」调用）。
 /// 仅对空目录写；已有 vault 或非空目录拒绝，绝不偷偷铺文件。
 #[tauri::command]
-pub fn scaffold_vault(target_path: String) -> Result<ScaffoldStats, String> {
+pub fn scaffold_vault(target_path: String) -> AppResult<ScaffoldStats> {
     scaffold_inner(&target_path)
 }
 
@@ -222,7 +222,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("随便.txt"), "x").unwrap();
         let err = scaffold_inner(root.to_string_lossy().as_ref()).unwrap_err();
-        assert!(err.contains("非空"), "应拒绝非空目录：{}", err);
+        assert!(err.to_string().contains("非空"), "应拒绝非空目录：{}", err);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -231,7 +231,7 @@ mod tests {
         let root = tmp("existing");
         fs::create_dir_all(root.join("01_企业与项目资产")).unwrap();
         let err = scaffold_inner(root.to_string_lossy().as_ref()).unwrap_err();
-        assert!(err.contains("已有 vault"), "应识别已有 vault：{}", err);
+        assert!(err.to_string().contains("已有 vault"), "应识别已有 vault：{}", err);
         let _ = fs::remove_dir_all(&root);
     }
 

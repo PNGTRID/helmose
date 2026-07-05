@@ -12,7 +12,7 @@
 // ============================================================
 
 use crate::commands::settings::{get_ai_generation_inner, upsert_ai_generation_inner};
-use crate::models::{AiCoachResult, AiMainline, AiTomorrowResult};
+use crate::models::{AppError, AppResult, AiCoachResult, AiMainline, AiTomorrowResult};
 use crate::services::ai::{build_client, complete_with_budget, AiClient};
 use crate::services::Database;
 use crate::utils::dates;
@@ -40,7 +40,7 @@ struct ProjectDigest {
 
 /// 聚合 vault 当前状态为摘要（projects + 全局统计）。
 /// 输出 serde_json::Value，调方把它序列化进 LLM 的 user 字段。
-fn gather_state(vault_id: &str, db: &Database) -> Result<Value, String> {
+fn gather_state(vault_id: &str, db: &Database) -> AppResult<Value> {
     let today = dates::today_iso();
 
     // 项目列表（按 priority 降序 + 主线置顶）
@@ -76,7 +76,7 @@ fn gather_state(vault_id: &str, db: &Database) -> Result<Value, String> {
 
 /// 聚合所有项目的 digest（name + priority + status + 进度）。
 /// 按 priority 降序、主线置顶排序（与启发式降级排序一致）。
-fn gather_projects(vault_id: &str, db: &Database, today: &str) -> Result<Vec<Value>, String> {
+fn gather_projects(vault_id: &str, db: &Database, today: &str) -> AppResult<Vec<Value>> {
     let rows = db.sqlite().query_map(
         "SELECT p.id, p.name, p.priority, p.status, p.is_mainline, p.last_activity, \
                 COUNT(t.id) AS total, \
@@ -101,7 +101,7 @@ fn gather_projects(vault_id: &str, db: &Database, today: &str) -> Result<Vec<Val
                 due_overdue: r.get::<_, i64>("overdue")?,
             })
         },
-    ).map_err(|e| e.to_string())?;
+    )?;
 
     Ok(rows
         .into_iter()
@@ -121,10 +121,10 @@ fn gather_projects(vault_id: &str, db: &Database, today: &str) -> Result<Vec<Val
 }
 
 /// 统计标量（COUNT），缺值回落 0
-fn count_db(db: &Database, sql: &str, args: &[&dyn rusqlite::ToSql]) -> Result<i64, String> {
+fn count_db(db: &Database, sql: &str, args: &[&dyn rusqlite::ToSql]) -> AppResult<i64> {
     db.sqlite()
         .query_row(sql, args, |r| r.get::<_, i64>(0))
-        .map_err(|e| e.to_string())
+        .map_err(AppError::Db)
         .map(|o| o.unwrap_or(0))
 }
 
@@ -137,7 +137,7 @@ fn count_db(db: &Database, sql: &str, args: &[&dyn rusqlite::ToSql]) -> Result<i
 /// 本地启发式算主线（projects top-1 by priority + activity）。
 /// 复用 indexer/projects.rs apply_global_passes 的 top-3 排序口径（priority desc → activity desc），
 /// 但独立实现（不依赖 ParsedNote 全集，直接用 DB projects 表）。
-fn heuristic_mainline(vault_id: &str, db: &Database) -> Result<AiMainline, String> {
+fn heuristic_mainline(vault_id: &str, db: &Database) -> AppResult<AiMainline> {
     // 优先 is_mainline=1 的（indexer 已判定的主线）
     let mainline_first: Option<(String,)> = db
         .sqlite()
@@ -147,7 +147,7 @@ fn heuristic_mainline(vault_id: &str, db: &Database) -> Result<AiMainline, Strin
             params![vault_id],
             |r| Ok((r.get::<_, String>(0)?,)),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
 
     let name = if let Some((n,)) = mainline_first {
         n
@@ -161,7 +161,7 @@ fn heuristic_mainline(vault_id: &str, db: &Database) -> Result<AiMainline, Strin
                 params![vault_id],
                 |r| Ok((r.get::<_, String>(0)?,)),
             )
-            .map_err(|e| e.to_string())?;
+            ?;
         match fallback {
             Some((n,)) => n,
             None => {
@@ -190,7 +190,7 @@ fn write_mainline_snapshot(
     db: &Database,
     date_iso: &str,
     mainline_project: &str,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let now = dates::now_iso8601();
     db.sqlite()
         .execute(
@@ -200,8 +200,7 @@ fn write_mainline_snapshot(
                generated_at = excluded.generated_at, \
                mainline_project = excluded.mainline_project",
             params![date_iso, now, mainline_project],
-        )
-        .map_err(|e| format!("写 life_state_snapshots 失败: {}", e))?;
+        )?;
     Ok(())
 }
 
@@ -212,7 +211,7 @@ pub async fn ai_mainline_inner(
     vault_id: &str,
     ai_client: Option<&dyn AiClient>,
     db: &Database,
-) -> Result<AiMainline, String> {
+) -> AppResult<AiMainline> {
     let date_iso = dates::today_iso();
 
     // 1. AI 分支（client 提供时）
@@ -296,7 +295,7 @@ pub async fn ai_mainline(
     vault_id: String,
     app: AppHandle,
     db: State<'_, Database>,
-) -> Result<AiMainline, String> {
+) -> AppResult<AiMainline> {
     let client = client_from_app(&app);
     ai_mainline_inner(&vault_id, client.as_deref(), db.inner()).await
 }
@@ -325,7 +324,7 @@ fn write_today_focus_snapshot(
     db: &Database,
     date_iso: &str,
     today_focus: &str,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let now = dates::now_iso8601();
     db.sqlite()
         .execute(
@@ -335,13 +334,12 @@ fn write_today_focus_snapshot(
                generated_at = excluded.generated_at, \
                today_focus = excluded.today_focus",
             params![date_iso, now, today_focus],
-        )
-        .map_err(|e| format!("写 life_state_snapshots.today_focus 失败: {}", e))?;
+        )?;
     Ok(())
 }
 
 /// 聚合今日待办列表（top 5 due_date ASC，仅元数据，无正文）。
-fn gather_today_todos(vault_id: &str, db: &Database) -> Result<Vec<Value>, String> {
+fn gather_today_todos(vault_id: &str, db: &Database) -> AppResult<Vec<Value>> {
     let today = dates::today_iso();
     let rows = db
         .sqlite()
@@ -357,12 +355,12 @@ fn gather_today_todos(vault_id: &str, db: &Database) -> Result<Vec<Value>, Strin
                 }))
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
 /// 启发式教练建议：基于今日完成数 / 待办 / 逾期数 / 主题线生成模板化建议。
-fn heuristic_coach(vault_id: &str, db: &Database) -> Result<AiCoachResult, String> {
+fn heuristic_coach(vault_id: &str, db: &Database) -> AppResult<AiCoachResult> {
     let state = gather_state(vault_id, db)?;
     let stats = &state["stats"];
     let pending = stats["pending_tasks"].as_i64().unwrap_or(0);
@@ -410,7 +408,7 @@ pub async fn ai_coach_inner(
     vault_id: &str,
     ai_client: Option<&dyn AiClient>,
     db: &Database,
-) -> Result<AiCoachResult, String> {
+) -> AppResult<AiCoachResult> {
     let date_iso = dates::today_iso();
 
     if let Some(client) = ai_client {
@@ -466,7 +464,7 @@ pub async fn ai_coach(
     vault_id: String,
     app: AppHandle,
     db: State<'_, Database>,
-) -> Result<AiCoachResult, String> {
+) -> AppResult<AiCoachResult> {
     let client = client_from_app(&app);
     ai_coach_inner(&vault_id, client.as_deref(), db.inner()).await
 }
@@ -476,7 +474,7 @@ pub async fn ai_coach(
 // ============================================================
 
 /// 启发式明日一句：基于明日待办数生成模板。
-fn heuristic_tomorrow(vault_id: &str, db: &Database, tomorrow_iso: &str) -> Result<String, String> {
+fn heuristic_tomorrow(vault_id: &str, db: &Database, tomorrow_iso: &str) -> AppResult<String> {
     let cnt = count_db(
         db,
         "SELECT COUNT(*) FROM tasks WHERE vault_id = ?1 AND status <> 'done' AND due_date = ?2",
@@ -497,7 +495,7 @@ fn heuristic_tomorrow(vault_id: &str, db: &Database, tomorrow_iso: &str) -> Resu
 
 /// 取或创建当日笔记（今日寄语写在当日，给次日看）。
 /// 复用 library::create_today_note_inner（已存在则返回，无则按模板创建）。
-fn ensure_today_note(vault_id: &str, db: &Database) -> Result<(String, String), String> {
+fn ensure_today_note(vault_id: &str, db: &Database) -> AppResult<(String, String)> {
     let nc = crate::commands::library::create_today_note_inner(vault_id, db)?;
     Ok((nc.id, nc.raw_content))
 }
@@ -529,7 +527,7 @@ pub fn replace_section_first_bullet_inner(
     sentence: &str,
     default_section: &str,
     db: &Database,
-) -> Result<(), String> {
+) -> AppResult<()> {
     use crate::commands::library::{append_bullet_inner, update_line_inner};
 
     // 读盘 → 取正文（去 frontmatter，与 indexer frontmatter::parse 同源）
@@ -541,10 +539,10 @@ pub fn replace_section_first_bullet_inner(
             params![note_id],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("note {} not found", note_id))?;
     let abs = std::path::PathBuf::from(&row.1).join(&row.0);
-    let full = std::fs::read_to_string(&abs).map_err(|e| format!("读取文件失败：{}", e))?;
+    let full = std::fs::read_to_string(&abs)?;
     let body = crate::services::indexer::frontmatter::parse(&full).content;
     let lines: Vec<&str> = body.lines().collect();
 
@@ -554,42 +552,43 @@ pub fn replace_section_first_bullet_inner(
         let cur = lines[i];
         let cur_lvl = heading_level(cur);
         let heading_text = cur.trim_start_matches('#').trim();
-        if cur_lvl.is_some() && crate::services::indexer::tomorrow::is_sentence_section(heading_text) {
-            // 记录 section 标题层级（与 library.rs section_insert_index 同口径）：
-            // 扫描时遇到同级或更浅标题（lvl <= section_lvl）才退出，更深标题（如 ### 在 ## 下）继续扫。
-            let section_lvl = cur_lvl.unwrap();
-            // 找该 section 下第一条非空内容行（可能是已存在的句子，也可能是空行）
-            let mut content_line: Option<(usize, String)> = None;
-            let mut j = i + 1;
-            while j < lines.len() {
-                let next_line = lines[j];
-                if let Some(lvl) = heading_level(next_line) {
-                    // 同级或更浅 → 退出（section 结束）；更深 → 继续（子标题内的内容也算本 section），
-                    // 但子标题行本身不算 content（要找的是子标题下或本节首段的 bullet/文本）。
-                    if lvl <= section_lvl {
-                        break;
-                    } else {
-                        j += 1;
-                        continue;
+        if let Some(section_lvl) = cur_lvl {
+            if crate::services::indexer::tomorrow::is_sentence_section(heading_text) {
+                // 记录 section 标题层级（与 library.rs section_insert_index 同口径）：
+                // 扫描时遇到同级或更浅标题（lvl <= section_lvl）才退出，更深标题（如 ### 在 ## 下）继续扫。
+                // 找该 section 下第一条非空内容行（可能是已存在的句子，也可能是空行）
+                let mut content_line: Option<(usize, String)> = None;
+                let mut j = i + 1;
+                while j < lines.len() {
+                    let next_line = lines[j];
+                    if let Some(lvl) = heading_level(next_line) {
+                        // 同级或更浅 → 退出（section 结束）；更深 → 继续（子标题内的内容也算本 section），
+                        // 但子标题行本身不算 content（要找的是子标题下或本节首段的 bullet/文本）。
+                        if lvl <= section_lvl {
+                            break;
+                        } else {
+                            j += 1;
+                            continue;
+                        }
                     }
+                    let t = next_line.trim_start();
+                    if !t.is_empty() {
+                        content_line = Some((j, next_line.to_string()));
+                        break;
+                    }
+                    j += 1;
                 }
-                let t = next_line.trim_start();
-                if !t.is_empty() {
-                    content_line = Some((j, next_line.to_string()));
-                    break;
+                if let Some((line_idx, _existing)) = content_line {
+                    // 已有句子 → 替换该行（1-based source_line = line_idx + 1）
+                    let new_text = format!("- {}", sentence);
+                    let _ = update_line_inner(note_id, (line_idx as i64) + 1, &new_text, db)?;
+                } else {
+                    // section 存在但空 → 追加 bullet（用原文 section 名，避免大小写漂移）
+                    let section_name = heading_text.to_string();
+                    let _ = append_bullet_inner(note_id, &section_name, sentence, false, db)?;
                 }
-                j += 1;
+                return Ok(());
             }
-            if let Some((line_idx, _existing)) = content_line {
-                // 已有句子 → 替换该行（1-based source_line = line_idx + 1）
-                let new_text = format!("- {}", sentence);
-                let _ = update_line_inner(note_id, (line_idx as i64) + 1, &new_text, db)?;
-            } else {
-                // section 存在但空 → 追加 bullet（用原文 section 名，避免大小写漂移）
-                let section_name = heading_text.to_string();
-                let _ = append_bullet_inner(note_id, &section_name, sentence, false, db)?;
-            }
-            return Ok(());
         }
         i += 1;
     }
@@ -607,7 +606,7 @@ pub async fn ai_tomorrow_inner(
     vault_id: &str,
     ai_client: Option<&dyn AiClient>,
     db: &Database,
-) -> Result<AiTomorrowResult, String> {
+) -> AppResult<AiTomorrowResult> {
     use chrono::Duration;
     let today = dates::today_naive();
     let tomorrow = today + Duration::days(1);
@@ -694,7 +693,7 @@ pub async fn ai_tomorrow(
     vault_id: String,
     app: AppHandle,
     db: State<'_, Database>,
-) -> Result<AiTomorrowResult, String> {
+) -> AppResult<AiTomorrowResult> {
     let client = client_from_app(&app);
     ai_tomorrow_inner(&vault_id, client.as_deref(), db.inner()).await
 }
@@ -707,7 +706,7 @@ pub fn update_tomorrow_sentence(
     note_id: String,
     new_sentence: String,
     db: State<'_, Database>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     replace_section_first_bullet_inner(&note_id, &new_sentence, "明日一句", db.inner())
 }
 

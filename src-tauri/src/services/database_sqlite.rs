@@ -28,6 +28,14 @@ impl SqliteDatabase {
         })
     }
 
+    /// 持锁访问连接（防 Mutex 中毒级联 panic）。
+    /// 任一命令持锁期 panic 会毒化 Mutex；原 `lock().unwrap()` 会令之后所有 DB 调用全部 panic，
+    /// 应用进入「点任何命令都崩」的硬死锁态。`into_inner` 即使中毒也取回连接继续可用
+    ///（中毒的 panic 已向上传播，连接本身未被破坏）。
+    fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.connection.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// 执行查询并返回多行
     pub fn query_map<T, F>(
         &self,
@@ -38,7 +46,7 @@ impl SqliteDatabase {
     where
         F: FnMut(&Row) -> SqliteResult<T>,
     {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(sql)?;
         let rows: SqliteResult<Vec<T>> = stmt.query_map(params, &mut f)?.collect();
         drop(stmt);
@@ -56,7 +64,7 @@ impl SqliteDatabase {
     where
         F: FnOnce(&Row) -> SqliteResult<T>,
     {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.lock_conn();
         let result = conn.query_row(sql, params, f);
         drop(conn);
         match result {
@@ -72,7 +80,7 @@ impl SqliteDatabase {
         sql: &str,
         params: &[&dyn rusqlite::ToSql],
     ) -> SqliteResult<usize> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.lock_conn();
         let result = conn.execute(sql, params)?;
         drop(conn);
         Ok(result)
@@ -83,7 +91,7 @@ impl SqliteDatabase {
     where
         F: FnOnce(&rusqlite::Transaction) -> SqliteResult<R>,
     {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.lock_conn();
         let result = {
             let tx = conn.unchecked_transaction()?;
             let r = f(&tx);

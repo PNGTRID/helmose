@@ -1,6 +1,6 @@
 // 笔记查询命令
 
-use crate::models::Note;
+use crate::models::{AppResult, Note};
 use crate::services::Database;
 use rusqlite::params;
 use tauri::State;
@@ -20,7 +20,7 @@ fn row_to_note(row: &rusqlite::Row) -> rusqlite::Result<Note> {
         week_iso: row.get("week_iso")?,
         tags: serde_json::from_str(&tags_json).unwrap_or_default(),
         frontmatter: serde_json::from_str(&fm_json).unwrap_or_default(),
-        raw_content: row.get("raw_content")?,
+        raw_content: String::new(), // get_notes 不回全文(性能红线:1.9万×全文必爆 IPC);单篇正文用 get_note_content
         mtime: row.get("mtime")?,
         content_hash: row.get("content_hash")?,
     })
@@ -33,31 +33,34 @@ pub fn get_notes(
     note_type: Option<String>,
     limit: Option<i64>,
     db: State<'_, Database>,
-) -> Result<Vec<Note>, String> {
+) -> AppResult<Vec<Note>> {
+    // 全部用位置占位符「?」按 params_vec 顺序绑定（避免 format! 拼数字造成的注入破窗，
+    // 也避免 ?N 显式编号在可选参数下错位）。
     let mut sql = String::from(
-        "SELECT id,vault_id,rel_path,file_name,title,note_type,layer,date_iso,week_iso,tags,frontmatter,raw_content,mtime,content_hash \
-         FROM notes WHERE vault_id = ?1",
+        "SELECT id,vault_id,rel_path,file_name,title,note_type,layer,date_iso,week_iso,tags,frontmatter,mtime,content_hash \
+         FROM notes WHERE vault_id = ?",
     );
     let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&vault_id];
     if let Some(ref t) = note_type {
-        sql.push_str(" AND note_type = ?2");
+        sql.push_str(" AND note_type = ?");
         params_vec.push(t);
     }
     sql.push_str(" ORDER BY date_iso DESC");
-    if let Some(l) = limit {
-        sql.push_str(&format!(" LIMIT {}", l));
+    if let Some(ref l) = limit {
+        sql.push_str(" LIMIT ?");
+        params_vec.push(l);
     }
 
     let rows = db
         .sqlite()
         .query_map(&sql, &params_vec, row_to_note)
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
 /// 统计：各类型笔记数量
 #[tauri::command]
-pub fn get_notes_stats(vault_id: String, db: State<'_, Database>) -> Result<serde_json::Value, String> {
+pub fn get_notes_stats(vault_id: String, db: State<'_, Database>) -> AppResult<serde_json::Value> {
     let rows = db
         .sqlite()
         .query_map(
@@ -69,7 +72,7 @@ pub fn get_notes_stats(vault_id: String, db: State<'_, Database>) -> Result<serd
                 Ok((t, c))
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let mut map = serde_json::Map::new();
     for (t, c) in rows {
         map.insert(t, serde_json::Value::from(c));
@@ -83,7 +86,7 @@ pub fn get_notes_stats(vault_id: String, db: State<'_, Database>) -> Result<serd
 pub fn get_tags_stats(
     vault_id: String,
     db: State<'_, Database>,
-) -> Result<Vec<(String, i64)>, String> {
+) -> AppResult<Vec<(String, i64)>> {
     use std::collections::HashMap;
 
     let rows = db
@@ -93,7 +96,7 @@ pub fn get_tags_stats(
             params![vault_id],
             |r| r.get::<_, String>(0),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let mut counts: HashMap<String, i64> = HashMap::new();
     for tags_json in rows {
         if let Ok(tags) = serde_json::from_str::<Vec<String>>(&tags_json) {

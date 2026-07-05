@@ -8,7 +8,7 @@
 // 注：projects/okrs 表由 indexer 尚未填充（v0.2 项目解析器），此处优雅降级。
 // ============================================================
 
-use crate::models::AgentExport;
+use crate::models::{AppError, AppResult, AgentExport};
 use crate::services::Database;
 use crate::utils::dates;
 use rusqlite::params;
@@ -17,10 +17,10 @@ use std::fs;
 use tauri::{AppHandle, Manager, State};
 
 /// 统计标量（COUNT），缺值回落 0
-fn count(db: &Database, sql: &str, vault_id: &str) -> Result<i64, String> {
+fn count(db: &Database, sql: &str, vault_id: &str) -> AppResult<i64> {
     db.sqlite()
         .query_row(sql, &[&vault_id as &dyn rusqlite::ToSql], |r| r.get::<_, i64>(0))
-        .map_err(|e| e.to_string())
+        .map_err(AppError::Db)
         .map(|o| o.unwrap_or(0))
 }
 
@@ -30,22 +30,21 @@ pub fn export_life_state(
     vault_id: String,
     app: AppHandle,
     db: State<'_, Database>,
-) -> Result<AgentExport, String> {
-    // vault 基本信息
-    let (vid, vname, vroot) = db
+) -> AppResult<AgentExport> {
+    // vault 基本信息（不导出 root_path：state.json 给外部 agent，无需宿主绝对路径）
+    let (vid, vname) = db
         .sqlite()
         .query_row(
-            "SELECT id, name, root_path FROM vaults WHERE id = ?1",
+            "SELECT id, name FROM vaults WHERE id = ?1",
             params![vault_id],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
                 ))
             },
         )
-        .map_err(|e| e.to_string())?
+        ?
         .ok_or_else(|| format!("vault {} not found", vault_id))?;
 
     // 聚合统计
@@ -70,7 +69,7 @@ pub fn export_life_state(
                 }))
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
 
     // 项目（indexer 尚未填充 projects 表，可能为空）
     let mainline: Vec<Value> = db
@@ -85,7 +84,7 @@ pub fn export_life_state(
                 }))
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let sideline: Vec<Value> = db
         .sqlite()
         .query_map(
@@ -98,7 +97,7 @@ pub fn export_life_state(
                 }))
             },
         )
-        .map_err(|e| e.to_string())?;
+        ?;
 
     let now = dates::now_iso8601();
     let today = dates::today_iso();
@@ -106,7 +105,7 @@ pub fn export_life_state(
     // state.json（机器可读）
     let state = json!({
         "generated_at": now,
-        "vault": { "id": vid, "name": vname, "root_path": vroot },
+        "vault": { "id": vid, "name": vname },
         "date_iso": today,
         "stats": {
             "notes": total_notes,
@@ -165,15 +164,15 @@ pub fn export_life_state(
     ));
 
     // 写 app_data_dir/agent/（非 vault 原文）
-    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data = app.path().app_data_dir()?;
     let agent_dir = app_data.join("agent");
-    fs::create_dir_all(&agent_dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&agent_dir)?;
     let md_path = agent_dir.join("LIFE-STATE.md");
     let json_path = agent_dir.join("state.json");
-    fs::write(&md_path, &md).map_err(|e| e.to_string())?;
+    fs::write(&md_path, &md)?;
     let json_str = serde_json::to_string_pretty(&state)
-        .map_err(|e| e.to_string())?;
-    fs::write(&json_path, json_str).map_err(|e| e.to_string())?;
+        ?;
+    fs::write(&json_path, json_str)?;
 
     // 落快照表（按日期 upsert，幂等）
     let top_json = serde_json::to_string(&top_tasks).unwrap_or_else(|_| "[]".into());
@@ -194,6 +193,6 @@ pub fn export_life_state(
         json_path: json_path.to_string_lossy().to_string(),
         date_iso: today,
         pending_tasks: pending,
-        total_notes: total_notes,
+        total_notes,
     })
 }

@@ -1,5 +1,5 @@
 // 项目查询命令
-use crate::models::{Project, ProjectProgress};
+use crate::models::{AppResult, Project, ProjectProgress};
 use crate::services::Database;
 use rusqlite::params;
 use tauri::State;
@@ -30,7 +30,7 @@ pub fn get_projects(
     by_mainline: Option<bool>,
     by_priority: Option<bool>,
     db: State<'_, Database>,
-) -> Result<Vec<Project>, String> {
+) -> AppResult<Vec<Project>> {
     let mut sql = String::from(
         "SELECT id,vault_id,note_id,name,status,priority,is_mainline,okr_priority,home_rel_path,last_activity,owner \
          FROM projects WHERE vault_id = ?1",
@@ -53,7 +53,7 @@ pub fn get_projects(
     let rows = db
         .sqlite()
         .query_map(&sql, &pv, row_to_project)
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -63,7 +63,7 @@ pub fn get_projects(
 pub fn get_project_progress_inner(
     vault_id: &str,
     db: &Database,
-) -> Result<Vec<ProjectProgress>, String> {
+) -> AppResult<Vec<ProjectProgress>> {
     let today = crate::utils::dates::today_iso();
     let sql = "\
         SELECT p.id, p.name, \
@@ -85,7 +85,7 @@ pub fn get_project_progress_inner(
                 due_overdue: r.get::<_, i64>(4)?,
             })
         })
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -94,7 +94,7 @@ pub fn get_project_progress_inner(
 pub fn get_project_progress(
     vault_id: String,
     db: State<'_, Database>,
-) -> Result<Vec<ProjectProgress>, String> {
+) -> AppResult<Vec<ProjectProgress>> {
     get_project_progress_inner(&vault_id, db.inner())
 }
 

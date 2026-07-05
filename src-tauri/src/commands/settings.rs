@@ -9,8 +9,8 @@
 //   3. **未配置 → 默认 enabled=false + provider=claude + key 空** → build_client None → 走降级链。
 // ============================================================
 
-use crate::models::AiSettings;
-use crate::services::Database;
+use crate::models::{AppError, AppResult, AiSettings, AiSettingsView};
+use crate::services::{secrets, Database};
 use rusqlite::params;
 use std::fs;
 use tauri::{AppHandle, Manager};
@@ -19,37 +19,49 @@ use tauri::{AppHandle, Manager};
 const CONFIG_FILE: &str = "config.json";
 
 /// 取 app_data_dir 路径（main.rs setup 已创建该目录）。
-fn config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+fn config_path(app: &AppHandle) -> AppResult<std::path::PathBuf> {
+    let app_data = app.path().app_data_dir()?;
     Ok(app_data.join(CONFIG_FILE))
 }
 
 /// 读 app_data_dir/config.json 全量配置（顶层 JSON 对象）。
 /// 文件不存在 / 解析失败 → 空对象（不报错，让上层走默认）。
-fn read_config_json(app: &AppHandle) -> Result<serde_json::Value, String> {
+fn read_config_json(app: &AppHandle) -> AppResult<serde_json::Value> {
     let p = config_path(app)?;
     if !p.exists() {
         return Ok(serde_json::json!({}));
     }
-    let s = fs::read_to_string(&p).map_err(|e| format!("读 config.json 失败: {}", e))?;
-    serde_json::from_str(&s).map_err(|e| format!("config.json 解析失败: {}", e))
+    let s = fs::read_to_string(&p)?;
+    serde_json::from_str(&s).map_err(AppError::Serde)
 }
 
 /// 写 app_data_dir/config.json 全量配置（覆盖）。
 /// 安全：config.json 含 api_key 明文（见 #3 审查），Unix 下收紧到 0600（仅 owner 读写），
 /// 防本机其他用户进程读取。Windows 无等效 chmod，依赖 app_data_dir ACL（用户私有目录）。
-fn write_config_json(app: &AppHandle, v: &serde_json::Value) -> Result<(), String> {
+fn write_config_json(app: &AppHandle, v: &serde_json::Value) -> AppResult<()> {
     let p = config_path(app)?;
     if let Some(parent) = p.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        fs::create_dir_all(parent)?;
     }
-    let s = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
-    fs::write(&p, s).map_err(|e| format!("写 config.json 失败: {}", e))?;
+    let s = serde_json::to_string_pretty(v)?;
+    // Unix 用 OpenOptions mode=0o600 在创建时即收紧权限，消除「先 fs::write 默认 0644 再
+    // set_permissions」的权限窗口（窗口期内本机其他用户可读明文 api_key）。
+    // Windows 无等效 chmod，依赖 app_data_dir ACL（用户私有目录）。
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&p, fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("收紧 config.json 权限失败: {}", e))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&p)?;
+        f.write_all(s.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(&p, s)?;
     }
     Ok(())
 }
@@ -58,11 +70,10 @@ fn write_config_json(app: &AppHandle, v: &serde_json::Value) -> Result<(), Strin
 fn ai_settings_from_json(root: &serde_json::Value) -> AiSettings {
     let ai = root.get("ai").cloned().unwrap_or(serde_json::json!({}));
     let mut s = AiSettings::default();
+    // B4：api_key 不再从 config.json 读（挪到 keyring），始终默认空串；
+    // 调用方 read_ai_settings 负责从 keyring 填 api_key。
     if let Some(p) = ai.get("provider").and_then(|v| v.as_str()) {
         s.provider = p.to_string();
-    }
-    if let Some(k) = ai.get("api_key").and_then(|v| v.as_str()) {
-        s.api_key = k.to_string();
     }
     if let Some(e) = ai.get("enabled").and_then(|v| v.as_bool()) {
         s.enabled = e;
@@ -70,44 +81,103 @@ fn ai_settings_from_json(root: &serde_json::Value) -> AiSettings {
     s
 }
 
-/// 读 AI 设置（敏感：key 在返回值里，仅前端设置页用；其他页面应判 enabled 而非读 key）。
-/// 命令壳：前端 SettingsPage 加载时调用。
+/// 读 AI 设置（对外不含 key）：返 AiSettingsView，has_key 由 api_key 是否为空推导。
+/// key 永不回前端——防 XSS 窃取（webview 一旦被注入即可读 devtools/Form state 的明文 key）
+/// + devtools 长时暴露。改 key 走 set_api_key 单独命令。
 #[tauri::command]
-pub fn get_ai_settings(app: AppHandle) -> Result<AiSettings, String> {
+pub fn get_ai_settings(app: AppHandle) -> AppResult<AiSettingsView> {
     let root = read_config_json(&app)?;
-    Ok(ai_settings_from_json(&root))
+    // 老 key 惰性迁移（失败不阻断 has_key 读取，只 warn）
+    if let Err(e) = migrate_legacy_key_if_needed(&app, &root) {
+        tracing::warn!("[secrets] 老 key 迁移失败（不阻断）：{}", e);
+    }
+    let s = ai_settings_from_json(&root);
+    // B4：has_key 由 keyring 是否有非空 key 推导（keyring 不可用 → false → 前端显示未配）
+    let has_key = secrets::get_api_key()?.is_some();
+    Ok(AiSettingsView {
+        provider: s.provider,
+        has_key,
+        enabled: s.enabled,
+    })
+}
+
+/// 老 api_key 惰性迁移：keyring 无 key 但 config.json ai.api_key 明文非空 →
+/// 挪到 keyring + 清掉 config.json 明文（只留 provider/enabled）。幂等。
+/// 触发点：get_ai_settings / read_ai_settings（首次 AI 调用或前端查 has_key 时，无启动钩子）。
+/// 纯判定逻辑在 services::secrets::plan_migration / strip_api_key_from_json（可单测）。
+fn migrate_legacy_key_if_needed(app: &AppHandle, root: &serde_json::Value) -> AppResult<()> {
+    let keyring_has_key = secrets::get_api_key()?.is_some();
+    match secrets::plan_migration(keyring_has_key, root) {
+        secrets::MigrationPlan::Skip => Ok(()),
+        secrets::MigrationPlan::Migrate { key } => {
+            secrets::set_api_key(&key)?;
+            let new_root = secrets::strip_api_key_from_json(root);
+            write_config_json(app, &new_root)?;
+            tracing::info!("[secrets] 老 api_key 已迁移到 keyring，config.json 明文已清");
+            Ok(())
+        }
+    }
 }
 
 /// 读 AI 设置（容错版）：文件缺失 / 解析失败 → None（让上层走默认降级，不报错）。
 /// 供 commands/ai.rs 三个 AI 命令壳复用——避免在 ai.rs 重写一份 config.json 解析逻辑
 /// 导致两处漂移（审查 #8）。语义与 get_ai_settings 不同：本函数容错返回 Option。
+/// B4：api_key 从 keyring 填（provider/enabled 仍读 config.json）→ 返完整 AiSettings 给 build_client。
 pub fn read_ai_settings(app: &AppHandle) -> Option<AiSettings> {
     let root = read_config_json(app).ok()?;
-    Some(ai_settings_from_json(&root))
+    // 老 key 惰性迁移（失败不阻断：key 仍可从 keyring 读，迁移下次再试）
+    if let Err(e) = migrate_legacy_key_if_needed(app, &root) {
+        tracing::warn!("[secrets] 老 key 迁移失败（不阻断）：{}", e);
+    }
+    let mut s = ai_settings_from_json(&root);
+    // api_key 从 keyring 填（keyring 不可用/未配 → 空 → build_client 走降级链）
+    s.api_key = secrets::get_api_key().ok().flatten().unwrap_or_default();
+    Some(s)
 }
 
-/// 写 AI 设置（合并到 config.json 的 ai 子对象，保留其他字段）。
-/// 命令壳：前端 SettingsPage 保存触发。
+/// 写 AI 设置（provider/enabled）：**保留既有 api_key**，key 走 set_api_key 单独管理。
+/// 命令壳：前端 SettingsPage 保存 provider/enabled 触发。
 #[tauri::command]
 pub fn set_ai_settings(
-    settings: AiSettings,
+    settings: AiSettingsView,
     app: AppHandle,
-) -> Result<AiSettings, String> {
+) -> AppResult<AiSettingsView> {
     let mut root = read_config_json(&app)?;
     // 若 root 非 object（异常配置），重置为空对象（保护其他逻辑）
     if !root.is_object() {
         root = serde_json::json!({});
     }
+    // B4：api_key 不再写入 config.json（挪到 keyring），ai 子对象只存 provider/enabled
     let ai = serde_json::json!({
         "provider": settings.provider,
-        "api_key": settings.api_key,
         "enabled": settings.enabled,
     });
     if let serde_json::Value::Object(ref mut map) = root {
         map.insert("ai".to_string(), ai);
     }
     write_config_json(&app, &root)?;
-    Ok(settings)
+    // has_key 从 keyring 读（不信任前端传的占位 has_key）
+    let has_key = secrets::get_api_key()?.is_some();
+    Ok(AiSettingsView {
+        provider: settings.provider,
+        has_key,
+        enabled: settings.enabled,
+    })
+}
+
+/// 单独写入 API key（与 provider/enabled 解耦，防 key 经 settings 对象在 IPC/state 暴露）。
+/// 命令壳：前端 SettingsPage「输入新 key」时调用。
+/// B4：写系统钥匙串（keyring），不碰 config.json（明文不再落盘）。
+#[tauri::command]
+pub fn set_api_key(api_key: String) -> AppResult<()> {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::invalid_input("API key 不能为空"));
+    }
+    if trimmed.len() > 256 {
+        return Err(AppError::invalid_input("API key 过长（>256 字符，疑似误输入）"));
+    }
+    secrets::set_api_key(trimmed)
 }
 
 /// 写入 ai_generations 缓存行（UNIQUE(vault_id,date_iso,feature) upsert）。
@@ -118,7 +188,7 @@ pub fn upsert_ai_generation_inner(
     feature: &str,
     content: &str,
     db: &Database,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = crate::utils::dates::now_iso8601();
     db.sqlite()
@@ -128,8 +198,7 @@ pub fn upsert_ai_generation_inner(
              ON CONFLICT(vault_id, date_iso, feature) DO UPDATE SET \
                id = excluded.id, content = excluded.content, created_at = excluded.created_at",
             params![id, vault_id, date_iso, feature, content, now],
-        )
-        .map_err(|e| format!("upsert ai_generations 失败: {}", e))?;
+        )?;
     Ok(())
 }
 
@@ -140,7 +209,7 @@ pub fn get_ai_generation_inner(
     date_iso: &str,
     feature: &str,
     db: &Database,
-) -> Result<Option<String>, String> {
+) -> AppResult<Option<String>> {
     let s = db
         .sqlite()
         .query_row(
@@ -149,7 +218,7 @@ pub fn get_ai_generation_inner(
             params![vault_id, date_iso, feature],
             |r| r.get::<_, String>(0),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(s)
 }
 
@@ -219,5 +288,16 @@ mod tests {
         assert_eq!(s2.provider, "openai");
         assert!(s2.enabled);
         assert_eq!(s2.api_key, "", "缺失 api_key 应回空串");
+    }
+
+    /// B4：api_key 不再从 JSON 读，即使 JSON 含 api_key 也忽略（始终空，由 keyring 填）。
+    #[test]
+    fn ai_settings_from_json_忽略json里的api_key() {
+        let s = ai_settings_from_json(&serde_json::json!({
+            "ai": { "provider": "claude", "api_key": "sk-应被忽略", "enabled": true }
+        }));
+        assert_eq!(s.provider, "claude");
+        assert!(s.enabled);
+        assert_eq!(s.api_key, "", "B4：api_key 不从 JSON 读，始终空（由 keyring 填）");
     }
 }

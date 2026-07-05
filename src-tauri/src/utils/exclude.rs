@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn 绝对路径版() {
         let root = Path::new("/vault");
-        assert!(is_excluded(&Path::new("/vault/专家团/x.md"), root));
-        assert!(!is_excluded(&Path::new("/vault/01_企业与项目资产/x.md"), root));
+        assert!(is_excluded(Path::new("/vault/专家团/x.md"), root));
+        assert!(!is_excluded(Path::new("/vault/01_企业与项目资产/x.md"), root));
     }
 }

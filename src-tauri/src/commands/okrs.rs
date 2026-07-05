@@ -3,7 +3,7 @@
 // 数据来源：indexer/okrs.rs 在全量索引时填入 okrs 表（strategy/project 文档的 KR section）。
 // 性能红线：只回 OKR 元数据（objective/kr_text/target/current 等），不含笔记正文。
 
-use crate::models::Okr;
+use crate::models::{AppResult, Okr};
 use crate::services::Database;
 use tauri::State;
 
@@ -28,7 +28,7 @@ pub fn list_okrs_inner(
     vault_id: &str,
     quarter: Option<&str>,
     db: &Database,
-) -> Result<Vec<Okr>, String> {
+) -> AppResult<Vec<Okr>> {
     let mut sql = String::from(
         "SELECT id,vault_id,source_note_id,quarter,objective,priority,kr_text,target_value,current_value,raw_row \
          FROM okrs WHERE vault_id = ?1",
@@ -46,7 +46,7 @@ pub fn list_okrs_inner(
     let rows = db
         .sqlite()
         .query_map(&sql, &pv, row_to_okr)
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -56,7 +56,7 @@ pub fn list_okrs(
     vault_id: String,
     quarter: Option<String>,
     db: State<'_, Database>,
-) -> Result<Vec<Okr>, String> {
+) -> AppResult<Vec<Okr>> {
     list_okrs_inner(&vault_id, quarter.as_deref(), db.inner())
 }
 

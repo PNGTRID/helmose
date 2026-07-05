@@ -8,6 +8,7 @@
 //      （全量用全局 stem_to_id，增量近似，下次全量会修正）
 // ============================================================
 
+use crate::models::{AppError, AppResult};
 use crate::services::indexer;
 use crate::services::Database;
 use crate::utils::dates;
@@ -34,14 +35,34 @@ fn qualify(abs: &Path, root: &Path) -> Option<String> {
     Some(rel)
 }
 
+/// 事务内单行查询：把 `QueryReturnedNoRows` 转成 `Ok(None)`，其余错误上抛。
+/// rusqlite 原生 `tx.query_row` 在 NoRows 时返 `Err`（与封装层 `Database::query_row` 的 `Ok(None)` 语义不一致）；
+/// 此 helper 统一为 `Option` 语义，替代散落的 `.ok()`——后者会把 DB 真错（锁/磁盘/语法）也吞成 `None`，
+/// 导致 FTS 'delete' 跳过（→ B7 孤儿）、project_id 回填静默失效等。B6：为后续 AppError 错误码化铺路（真错可上抛映射）。
+fn query_optional<T, F>(
+    tx: &rusqlite::Transaction,
+    sql: &str,
+    params: &[&dyn rusqlite::ToSql],
+    f: F,
+) -> rusqlite::Result<Option<T>>
+where
+    F: FnOnce(&rusqlite::Row) -> rusqlite::Result<T>,
+{
+    match tx.query_row(sql, params, f) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// upsert 单个 md 文件（读盘 → 解析 → 写库 + 同步 FTS）。
 /// 文件不存在 / 非 md / 排除目录 → 返回 Ok(false)。
-pub fn upsert_file(db: &Database, vault_id: &str, root: &Path, abs: &Path) -> Result<bool, String> {
+pub fn upsert_file(db: &Database, vault_id: &str, root: &Path, abs: &Path) -> AppResult<bool> {
     let rel = match qualify(abs, root) {
         Some(r) => r,
         None => return Ok(false),
     };
-    let content = std::fs::read_to_string(abs).map_err(|e| e.to_string())?;
+    let content = std::fs::read_to_string(abs)?;
     upsert_rel(db, vault_id, &rel, &content, Some(abs))
 }
 
@@ -53,7 +74,7 @@ pub fn upsert_rel(
     rel: &str,
     content: &str,
     abs: Option<&Path>,
-) -> Result<bool, String> {
+) -> AppResult<bool> {
     if is_excluded_rel(rel) {
         return Ok(false);
     }
@@ -79,22 +100,21 @@ pub fn upsert_rel(
     db.sqlite()
         .transaction(|tx| {
             // 1. 旧记录：拿 id 复用 + 取 FTS delete 所需原值（title 可能 NULL）
-            let old: Option<(String, i64, Option<String>, String, String)> = tx
-                .query_row(
-                    "SELECT id, rowid, title, raw_content, tags \
-                     FROM notes WHERE vault_id = ?1 AND rel_path = ?2",
-                    params![vault_id, rel],
-                    |r| {
-                        Ok((
-                            r.get(0)?,
-                            r.get(1)?,
-                            r.get(2)?,
-                            r.get::<_, String>(3)?,
-                            r.get::<_, String>(4)?,
-                        ))
-                    },
-                )
-                .ok();
+            let old: Option<(String, i64, Option<String>, String, String)> = query_optional(
+                tx,
+                "SELECT id, rowid, title, raw_content, tags \
+                 FROM notes WHERE vault_id = ?1 AND rel_path = ?2",
+                params![vault_id, rel],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                },
+            )?;
             if let Some((_, old_rowid, old_title, old_raw, old_tags)) = &old {
                 let _ = tx.execute(
                     "INSERT INTO notes_fts(notes_fts, rowid, title, raw_content, tags) \
@@ -121,10 +141,8 @@ pub fn upsert_rel(
                         ))
                     });
                     if let Ok(rows) = rows {
-                        for row in rows {
-                            if let Ok((sl, text, ts)) = row {
-                                m.insert((sl, text), ts);
-                            }
+                        for (sl, text, ts) in rows.flatten() {
+                            m.insert((sl, text), ts);
                         }
                     }
                 }
@@ -141,17 +159,16 @@ pub fn upsert_rel(
                 "DELETE FROM notes WHERE vault_id = ?1 AND rel_path = ?2",
                 params![vault_id, rel],
             )?;
-            let collision: Option<i64> = tx
-                .query_row(
-                    "SELECT 1 FROM notes \
-                     WHERE vault_id = ?1 AND content_hash = ?2 AND rel_path <> ?3 \
-                     LIMIT 1",
-                    params![vault_id, &base_hash, rel],
-                    |r| r.get(0),
-                )
-                .ok();
+            let collision: Option<i64> = query_optional(
+                tx,
+                "SELECT 1 FROM notes \
+                 WHERE vault_id = ?1 AND content_hash = ?2 AND rel_path <> ?3 \
+                 LIMIT 1",
+                params![vault_id, &base_hash, rel],
+                |r| r.get(0),
+            )?;
             let id = if collision.is_some() {
-                eprintln!(
+                tracing::warn!(
                     "[incremental] content_hash 碰撞，加 rel_path 消歧：{} ← {}",
                     base_hash, rel
                 );
@@ -233,13 +250,12 @@ pub fn upsert_rel(
             for l in &p.wikilinks {
                 let stem = l.target.split('/').next_back().unwrap_or(&l.target);
                 let fname = format!("{}.md", stem);
-                let target_id: Option<String> = tx
-                    .query_row(
-                        "SELECT id FROM notes WHERE vault_id = ?1 AND file_name = ?2 COLLATE NOCASE LIMIT 1",
-                        params![vault_id, fname],
-                        |r| r.get(0),
-                    )
-                    .ok();
+                let target_id: Option<String> = query_optional(
+                    tx,
+                    "SELECT id FROM notes WHERE vault_id = ?1 AND file_name = ?2 COLLATE NOCASE LIMIT 1",
+                    params![vault_id, fname],
+                    |r| r.get(0),
+                )?;
                 tx.execute(
                     "INSERT INTO links (id,vault_id,source_note_id,target_text,target_note_id,alias,is_dangling,link_type) \
                      VALUES (?1,?2,?3,?4,?5,?6,?7,'wikilink')",
@@ -290,14 +306,17 @@ pub fn upsert_rel(
             for ev in &p.events {
                 // 行级 pid：bullet 内 `#project:名` 标记 → 查 projects 表按名匹配（与全量第四遍同口径）。
                 // 匹配不到留 NULL，由步骤9 frontmatter.project 兜底回填。
-                let pid: Option<String> = ev.project_name.as_deref().and_then(|n| {
-                    tx.query_row(
+                // （原 `and_then` + `.ok()` 会吞 DB 真错 → pid 永远 NULL；改 `if let` + `?` 让真错上抛，B6）
+                let pid: Option<String> = if let Some(n) = ev.project_name.as_deref() {
+                    query_optional(
+                        tx,
                         "SELECT id FROM projects WHERE vault_id = ?1 AND name = ?2 LIMIT 1",
                         params![vault_id, n],
                         |r| r.get::<_, String>(0),
-                    )
-                    .ok()
-                });
+                    )?
+                } else {
+                    None
+                };
                 tx.execute(
                     "INSERT INTO events \
                      (id,note_id,vault_id,title,event_time,event_date,content,output,project_id,raw_bullet,source_line) \
@@ -361,13 +380,12 @@ pub fn upsert_rel(
             //    M1：events 在步骤7已尝试 bullet 内 #project:名 行级匹配，此处加 `AND project_id IS NULL`
             //    守卫避免覆盖行级标记（与全量第六遍回填同口径）。
             if let Some(proj_name) = p.frontmatter.get("project").and_then(|v| v.as_str()) {
-                let pid: Option<String> = tx
-                    .query_row(
-                        "SELECT id FROM projects WHERE vault_id = ?1 AND name = ?2 LIMIT 1",
-                        params![vault_id, proj_name],
-                        |r| r.get(0),
-                    )
-                    .ok();
+                let pid: Option<String> = query_optional(
+                    tx,
+                    "SELECT id FROM projects WHERE vault_id = ?1 AND name = ?2 LIMIT 1",
+                    params![vault_id, proj_name],
+                    |r| r.get(0),
+                )?;
                 if let Some(pid) = pid {
                     tx.execute(
                         "UPDATE tasks SET project_id = ?1 WHERE note_id = ?2 AND vault_id = ?3",
@@ -380,13 +398,12 @@ pub fn upsert_rel(
                 }
             }
             Ok(())
-        })
-        .map_err(|e: rusqlite::Error| e.to_string())?;
+        })?;
     Ok(true)
 }
 
 /// remove 单个 md 文件（文件已删除事件调用）。返回是否确实删了一行。
-pub fn remove_file(db: &Database, vault_id: &str, root: &Path, abs: &Path) -> Result<bool, String> {
+pub fn remove_file(db: &Database, vault_id: &str, root: &Path, abs: &Path) -> AppResult<bool> {
     let rel = match rel_of(abs, root) {
         Some(r) => r,
         None => return Ok(false),
@@ -395,17 +412,16 @@ pub fn remove_file(db: &Database, vault_id: &str, root: &Path, abs: &Path) -> Re
 }
 
 /// remove 指定相对路径（删除笔记时直接调用）。
-pub fn remove_rel(db: &Database, vault_id: &str, rel: &str) -> Result<bool, String> {
+pub fn remove_rel(db: &Database, vault_id: &str, rel: &str) -> AppResult<bool> {
     db.sqlite()
         .transaction(|tx| {
-            let old: Option<(i64, Option<String>, String, String)> = tx
-                .query_row(
-                    "SELECT rowid, title, raw_content, tags \
-                     FROM notes WHERE vault_id = ?1 AND rel_path = ?2",
-                    params![vault_id, rel],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)),
-                )
-                .ok();
+            let old: Option<(i64, Option<String>, String, String)> = query_optional(
+                tx,
+                "SELECT rowid, title, raw_content, tags \
+                 FROM notes WHERE vault_id = ?1 AND rel_path = ?2",
+                params![vault_id, rel],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)),
+            )?;
             if let Some((rowid, title, raw, tags)) = old {
                 let _ = tx.execute(
                     "INSERT INTO notes_fts(notes_fts, rowid, title, raw_content, tags) \
@@ -420,7 +436,7 @@ pub fn remove_rel(db: &Database, vault_id: &str, rel: &str) -> Result<bool, Stri
             }
             Ok(false)
         })
-        .map_err(|e: rusqlite::Error| e.to_string())
+        .map_err(AppError::Db)
 }
 
 #[cfg(test)]
