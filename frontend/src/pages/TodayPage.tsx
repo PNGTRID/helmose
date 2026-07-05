@@ -33,6 +33,7 @@ import {
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
@@ -131,7 +132,7 @@ export default function TodayPage() {
       const nc = await api.createTodayNote(vault.id);
       setDrawerNoteId(nc.id);
     } catch (e) {
-      message.error(`操作失败：${e}`);
+      notifyError("操作", e);
     }
   };
 
@@ -142,7 +143,7 @@ export default function TodayPage() {
       await api.updateLine(ev.note_id, ev.source_line, `- ${newText}`);
       await refresh();
     } catch (e) {
-      message.error(`编辑失败：${e}`);
+      notifyError("编辑", e);
     }
   };
   const onDeleteEvent = async (ev: Event) => {
@@ -152,7 +153,7 @@ export default function TodayPage() {
       message.success("已删除");
       await refresh();
     } catch (e) {
-      message.error(`删除失败：${e}`);
+      notifyError("删除", e);
     }
   };
 
@@ -163,7 +164,7 @@ export default function TodayPage() {
       await api.toggleTask(t.note_id, t.source_line, done);
       await refresh();
     } catch (e) {
-      message.error(`勾选失败：${e}`);
+      notifyError("勾选", e);
     }
   };
   const onEditTask = async (t: Task, newText: string) => {
@@ -173,7 +174,7 @@ export default function TodayPage() {
       await api.updateLine(t.note_id, t.source_line, prefix + newText);
       await refresh();
     } catch (e) {
-      message.error(`编辑失败：${e}`);
+      notifyError("编辑", e);
     }
   };
   const onDeleteTask = async (t: Task) => {
@@ -183,7 +184,7 @@ export default function TodayPage() {
       message.success("已删除");
       await refresh();
     } catch (e) {
-      message.error(`删除失败：${e}`);
+      notifyError("删除", e);
     }
   };
 
@@ -246,7 +247,7 @@ export default function TodayPage() {
       {/* M4：AI 教练面板。
           · 未启用 / 未配 key → 显降级态卡（引导去设置）
           · 已启用且配 key → 显三卡（heuristic 结果也显，标「本地推断」） */}
-      {aiSettings && aiSettings.enabled && aiSettings.api_key ? (
+      {aiSettings && aiSettings.enabled && aiSettings.has_key ? (
         <Row>
           <Col span={24}>
             <Card title={<Space><SettingOutlined /><span>AI 教练</span></Space>} loading={loading}>

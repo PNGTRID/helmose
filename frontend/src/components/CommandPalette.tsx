@@ -2,8 +2,11 @@
 // 有 query：FTS5 全库搜索 → snippet 高亮 → 键盘上下选/Enter 跳转。
 // 空 query：快捷跳页（今日/任务/项目/日历/图谱/设置）+ 最近打开的笔记。
 // 统一 items + selectedIdx + 键盘导航。
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Input, List, Modal, Tag } from "antd";
+import { sanitizeHtml } from "../utils/sanitize";
+import { notifyError } from "../utils/notifyError";
+import { safeReadJSON, safeSetItem } from "../utils/safeLocalStorage";
 import {
   ApartmentOutlined,
   CalendarOutlined,
@@ -46,6 +49,8 @@ export default function CommandPalette() {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selected, setSelected] = useState(0);
+  // 搜索请求序号：防慢请求晚到覆盖新关键词结果（FTS 全库搜慢，竞态放大）
+  const seqRef = useRef(0);
 
   const isQuery = q.trim().length > 0;
 
@@ -65,7 +70,19 @@ export default function CommandPalette() {
       return;
     }
     const h = setTimeout(() => {
-      api.searchNotes(vault.id, kw, 20).then(setResults).catch(() => setResults([]));
+      // 请求序号守卫：仅最新一次请求的结果才 setResults，慢请求晚到丢弃
+      const mySeq = ++seqRef.current;
+      api
+        .searchNotes(vault.id, kw, 20)
+        .then((r) => {
+          if (mySeq === seqRef.current) setResults(r);
+        })
+        .catch((e) => {
+          if (mySeq === seqRef.current) {
+            notifyError("搜索", e);
+            setResults([]);
+          }
+        });
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -78,22 +95,15 @@ export default function CommandPalette() {
     return m;
   }, [notes]);
 
-  // 最近搜索：localStorage 记最近 6 个查询，空 query 时点击重填
-  const [recentQueries, setRecentQueries] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("helmose-recent-queries") || "[]");
-    } catch {
-      return [];
-    }
-  });
+  // 最近搜索：localStorage 记最近 6 个查询，空 query 时点击重填（收口 safeLocalStorage，B15）
+  const RECENT_Q_KEY = "helmose-recent-queries";
+  const [recentQueries, setRecentQueries] = useState<string[]>(() =>
+    safeReadJSON<string[]>(RECENT_Q_KEY, [])
+  );
   const recordQuery = (kw: string) => {
     setRecentQueries((prev) => {
       const next = [kw, ...prev.filter((x) => x !== kw)].slice(0, 6);
-      try {
-        localStorage.setItem("helmose-recent-queries", JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
+      safeSetItem(RECENT_Q_KEY, JSON.stringify(next));
       return next;
     });
   };
@@ -149,7 +159,7 @@ export default function CommandPalette() {
               {/* snippet 含 <b> 高亮关键词（后端 FTS5 生成），原文渲染 */}
               <div
                 style={{ fontSize: 12, color: "var(--ob-text-muted)" }}
-                dangerouslySetInnerHTML={{ __html: r.snippet || r.rel_path }}
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(r.snippet || r.rel_path) }}
               />
             </>
           ),

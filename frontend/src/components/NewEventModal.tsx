@@ -6,6 +6,7 @@ import { DatePicker, Modal, message } from "antd";
 import { useEffect, useState } from "react";
 import type { Dayjs } from "dayjs";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { buildEventBullet } from "../utils/quickAdd";
 import EventFields, { type EventFieldValue, emptyEventFields } from "./EventFields";
 
@@ -69,7 +70,7 @@ export default function NewEventModal({
       onSuccess?.();
       onCancel();
     } catch (e) {
-      message.error(`添加失败：${e}`);
+      notifyError("添加", e);
     } finally {
       setSaving(false);
     }

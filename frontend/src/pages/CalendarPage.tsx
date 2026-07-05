@@ -28,6 +28,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import { dateKey } from "../utils/date";
@@ -208,7 +209,7 @@ export default function CalendarPage() {
       setDrawerNoteId(id);
       message.success(`已创建/打开 ${selected.format("YYYY-MM-DD")} 日志`);
     } catch (e) {
-      message.error(`创建失败（可能已存在）：${e}`);
+      notifyError("创建", e);
     }
   };
 
@@ -225,7 +226,7 @@ export default function CalendarPage() {
       await api.updateLine(ev.note_id, ev.source_line, `- ${newText}`);
       bumpTick();
     } catch (e) {
-      message.error(`编辑失败：${e}`);
+      notifyError("编辑", e);
     }
   };
   const onDeleteEvent = async (ev: Event) => {
@@ -235,7 +236,7 @@ export default function CalendarPage() {
       message.success("已删除");
       bumpTick();
     } catch (e) {
-      message.error(`删除失败：${e}`);
+      notifyError("删除", e);
     }
   };
 

@@ -18,10 +18,12 @@ import {
 import { CaretRightOutlined, FileAddOutlined, FolderOpenOutlined, FolderOutlined } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
 import { openNoteFromMeta } from "../utils/note";
 import { getRecent } from "../utils/recentlyOpened";
+import { safeReadJSON, safeSetItem } from "../utils/safeLocalStorage";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import { childDirs, fileIcon, makeCompare, type SortMode } from "../utils/tree";
 import type { NoteMeta, RefLoc, SearchResult } from "../types";
@@ -65,13 +67,9 @@ export default function FilePanel({ width }: { width: number }) {
   // 当前 vault 所有目录扁平数组（listDirs），供移动弹窗的 TreeSelect 用（独立于树构建，避免漂移）
   const [dirs, setDirs] = useState<string[]>([]);
   // 展开状态持久化（localStorage，下次打开恢复用户展开的目录）
-  const [expandedKeys, setExpandedKeys] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("helmose-expanded-dirs") || "[]");
-    } catch {
-      return [];
-    }
-  });
+  const [expandedKeys, setExpandedKeys] = useState<string[]>(() =>
+    safeReadJSON<string[]>("helmose-expanded-dirs", [])
+  );
   const [loading, setLoading] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("natural");
 
@@ -116,7 +114,7 @@ export default function FilePanel({ width }: { width: number }) {
       setNewName("");
       await useVaultStore.getState().index();
     } catch (e) {
-      message.error(`创建失败（可能已存在）：${e}`);
+      notifyError("创建", e);
     }
   };
 
@@ -124,11 +122,7 @@ export default function FilePanel({ width }: { width: number }) {
 
   // 展开状态变化时持久化（与初始化读配对）
   useEffect(() => {
-    try {
-      localStorage.setItem("helmose-expanded-dirs", JSON.stringify(expandedKeys));
-    } catch {
-      /* ignore */
-    }
+    safeSetItem("helmose-expanded-dirs", JSON.stringify(expandedKeys));
   }, [expandedKeys]);
   const bodyRef = useRef<HTMLDivElement>(null);
   // 虚拟滚动高度：测面板可视区，供 antd Tree virtual 模式用（1.9 万节点只渲染可见行）
@@ -366,7 +360,7 @@ export default function FilePanel({ width }: { width: number }) {
       // 刷新文件树（写 vault 后 note_id 可能变 → 重拉而非 patch）
       useVaultStore.getState().bumpTick();
     } catch (e) {
-      message.error(`移动失败：${e}`);
+      notifyError("移动", e);
     }
   };
 
@@ -426,7 +420,7 @@ export default function FilePanel({ width }: { width: number }) {
       setRenameValue("");
       useVaultStore.getState().bumpTick();
     } catch (e) {
-      message.error(`重命名失败：${e}`);
+      notifyError("重命名", e);
     }
   };
 
@@ -451,7 +445,7 @@ export default function FilePanel({ width }: { width: number }) {
       useTabsStore.getState().close(`note:${noteId}`);
       useVaultStore.getState().bumpTick();
     } catch (e) {
-      message.error(`删除失败：${e}`);
+      notifyError("删除", e);
     }
   };
 

@@ -7,7 +7,7 @@
 // 防循环：外部 value 变化用 isExternalUpdate ref 守 setContent→onUpdate→onChange 死循环。
 import "./RichEditor.css";
 import { useEffect, useRef } from "react";
-import { EditorContent, useEditor } from "@tiptap/react";
+import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import LinkExtension from "@tiptap/extension-link";
@@ -16,6 +16,8 @@ import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import { Table, TableRow, TableCell, TableHeader } from "@tiptap/extension-table";
 import RichEditorToolbar from "./RichEditorToolbar";
+import WikilinkDecorations from "./WikilinkDecorations";
+import { useWikilinkNavigation } from "../hooks/useWikilinkNavigation";
 
 /** 还原 @tiptap/markdown 对 wikilink 成对括号的转义。
  *  @tiptap/markdown 序列化会对非代码文本的 [] 反斜杠转义（escapeMarkdownSyntax），
@@ -34,16 +36,48 @@ interface Props {
   placeholder?: string;
   /** Ctrl/Cmd+S 快捷键保存（父层 NoteEditor 注入） */
   onSaveShortcut?: () => void;
+  /** Esc 退出编辑（父层 NoteEditor 注入，可视化模式生效） */
+  onCancel?: () => void;
 }
 
-export default function RichEditor({ value, onChange, placeholder, onSaveShortcut }: Props) {
+export default function RichEditor({ value, onChange, placeholder, onSaveShortcut, onCancel }: Props) {
   // 追踪是否外部触发的 setContent，避免 onChange 循环
   const isExternalUpdate = useRef(false);
   // 上一次同步给 editor 的 value，跳过重复 setContent
   const lastSyncedValue = useRef(value);
-  // onSaveShortcut 用 ref 透传进 editorProps.handleKeyDown，避免重建 editor
+  // onSaveShortcut / onCancel 用 ref 透传进 editorProps.handleKeyDown，避免重建 editor
   const saveRef = useRef(onSaveShortcut);
   saveRef.current = onSaveShortcut;
+  const escRef = useRef(onCancel);
+  escRef.current = onCancel;
+  // editor 实例透传给 handlePaste：editorProps 配置时 editor 还未返回，用 ref 在 editor 创建后填充；
+  // 运行时（用户粘贴）必已就绪。insertContent 正确处理多行（按行建段落）。
+  const editorRef = useRef<Editor | null>(null);
+  // wikilink 可点跳转：点击 .helmose-wikilink → 全库搜 target → 跳转（复用统一 hook）
+  const { handleClick: handleWikilinkClick } = useWikilinkNavigation();
+  // 跟踪 Shift 键状态（ClipboardEvent 无 shiftKey/getModifierState，纯文本粘贴靠全局 flag 判定）
+  const shiftDownRef = useRef(false);
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftDownRef.current = true;
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftDownRef.current = false;
+    };
+    // 失焦重置：窗口切走/失焦时 keyup 不触发，防 Shift 卡死永远 true（之后普通粘贴被误判为纯文本）。
+    // 副作用：窗口外按住 Shift 切回粘贴会失效（退化为普通粘贴，安全降级）——DOM 规范限制，可接受。
+    const onBlur = () => {
+      shiftDownRef.current = false;
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 
   const editor = useEditor({
     extensions: [
@@ -65,6 +99,8 @@ export default function RichEditor({ value, onChange, placeholder, onSaveShortcu
       TableRow,
       TableCell,
       TableHeader,
+      // wikilink 可点装饰（视图层高亮 [[x]] 为彩色链接，不改文档模型）
+      WikilinkDecorations,
     ],
     content: value,
     contentType: "markdown",
@@ -81,7 +117,37 @@ export default function RichEditor({ value, onChange, placeholder, onSaveShortcu
           saveRef.current?.();
           return true;
         }
+        // Esc → 退出编辑（父层 onCancel）
+        if (event.key === "Escape") {
+          event.preventDefault();
+          escRef.current?.();
+          return true;
+        }
         return false;
+      },
+      // Ctrl/Cmd+Shift+V → 粘贴为纯文本（防外来富文本格式污染 vault 正文）。
+      // ClipboardEvent 无 shiftKey（DOM 规范 ClipboardEvent 不继承 KeyboardEvent），用 shiftDownRef
+      // （window keydown/keyup/blur 跟踪）判定。多行显式按行建段落（不依赖字符串 \n 解析，
+      // 避免 ProseMirror 把单 \n 当 hardBreak 致 markdown 序列化后格式漂移）；单行作 text 入当前段。
+      handlePaste(_view, event) {
+        if (!shiftDownRef.current) return false;
+        const editor = editorRef.current;
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        // editor 未就绪或无文本 → 不拦截，走默认粘贴（防 preventDefault 后内容丢失）
+        if (!editor || !text) return false;
+        event.preventDefault();
+        const lines = text.replace(/\r\n/g, "\n").split("\n");
+        if (lines.length === 1) {
+          editor.commands.insertContent(lines[0]);
+        } else {
+          editor.commands.insertContent(
+            lines.map((line) => ({
+              type: "paragraph",
+              content: line ? [{ type: "text", text: line }] : [],
+            }))
+          );
+        }
+        return true;
       },
     },
     onUpdate: ({ editor: ed }) => {
@@ -96,6 +162,11 @@ export default function RichEditor({ value, onChange, placeholder, onSaveShortcu
     },
   });
 
+  // editor 创建后透传给 handlePaste（ref 填充，运行时粘贴读取）
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
+
   // 外部 value 变化 → 反向同步进编辑器（跳过自身 onChange 触发的变化）
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
@@ -109,7 +180,14 @@ export default function RichEditor({ value, onChange, placeholder, onSaveShortcu
   }, [value, editor]);
 
   return (
-    <div className="rich-editor">
+    <div
+      className="rich-editor"
+      onClick={(e) => {
+        // 仅 Ctrl/Cmd+Click 跳转 wikilink（普通单击让 ProseMirror 定位光标，允许在可视化模式编辑 [[x]] 文字）
+        if (!(e.metaKey || e.ctrlKey)) return;
+        void handleWikilinkClick(e);
+      }}
+    >
       <RichEditorToolbar editor={editor} />
       <EditorContent editor={editor} />
     </div>

@@ -6,7 +6,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Card, Drawer, Segmented, Space, Spin, Tabs, Typography, message } from "antd";
+import { sanitizeHtml } from "../utils/sanitize";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import { useTaskViewStore, type TaskView, type TaskGroupBy } from "../stores/taskView";
 import { useWikilinkNavigation } from "../hooks/useWikilinkNavigation";
@@ -113,7 +115,7 @@ export default function TasksPage() {
       message.success(done ? "已完成" : "已取消完成");
       await refresh();
     } catch (e) {
-      message.error(`勾选失败：${e}`);
+      notifyError("勾选", e);
     } finally {
       setToggling(false);
     }
@@ -260,7 +262,7 @@ export default function TasksPage() {
             </Text>
             <div
               className="md-preview"
-              dangerouslySetInnerHTML={{ __html: noteContent.html }}
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(noteContent.html) }}
             />
           </div>
         )}

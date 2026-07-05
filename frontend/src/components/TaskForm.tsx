@@ -6,6 +6,7 @@ import { useState } from "react";
 import { DatePicker, Segmented, Select, Space, message, Input } from "antd";
 import type { Dayjs } from "dayjs";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import { useActiveProjects } from "../hooks/useActiveProjects";
 import { buildTaskBullet } from "../utils/quickAdd";
@@ -74,7 +75,7 @@ export default function TaskForm({ onSubmitted }: Props) {
       setStatus("todo");
       onSubmitted?.();
     } catch (e) {
-      message.error(`新建失败：${e}`);
+      notifyError("新建", e);
     } finally {
       setSaving(false);
     }

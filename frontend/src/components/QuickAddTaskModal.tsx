@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { DatePicker, Modal, Segmented, Select, message } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import { useActiveProjects } from "../hooks/useActiveProjects";
 import { buildTaskBullet } from "../utils/quickAdd";
@@ -127,7 +128,7 @@ export default function QuickAddTaskModal({ open, onCancel, onSuccess }: Props) 
       onSuccess?.();
       onCancel();
     } catch (e) {
-      message.error(`添加失败：${e}`);
+      notifyError("添加", e);
     } finally {
       setSaving(false);
     }

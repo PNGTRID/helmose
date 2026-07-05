@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { Drawer, Spin } from "antd";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import NoteEditor from "./NoteEditor";
 import NoteFieldsForm from "./NoteFieldsForm";
@@ -28,12 +29,26 @@ export default function NoteEditorDrawer({ open, noteId, onClose, onSaved }: Pro
       setContent(null);
       return;
     }
+    // 竞态守卫：快速切 noteId 时旧请求晚到丢弃，防覆盖新 note 内容
+    let cancelled = false;
     setLoading(true);
     api
       .getNoteContent(noteId)
-      .then((nc) => setContent(nc))
-      .catch(() => setContent(null))
-      .finally(() => setLoading(false));
+      .then((nc) => {
+        if (!cancelled) setContent(nc);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          notifyError("加载笔记", e);
+          setContent(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, noteId]);
 
   const bumpTick = () => useVaultStore.setState((s) => ({ watcherTick: s.watcherTick + 1 }));

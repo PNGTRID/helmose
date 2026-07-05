@@ -2,6 +2,19 @@
 
 export type IndexingState = 'idle' | 'scanning' | 'parsing' | 'error';
 
+/** 后端 AppError 错误码（对齐 src-tauri/src/models/error.rs 的 variant 名）。
+ *  后端返 Result<T, AppError>，AppError 经 IPC 序列化为 {code, message}。 */
+export type AppErrorCode =
+  | 'NotFound'
+  | 'InvalidInput'
+  | 'Conflict'
+  | 'PreconditionFailed'
+  | 'Db'
+  | 'Io'
+  | 'Serde'
+  | 'Secrets'
+  | 'Internal';
+
 export interface Vault {
   id: string;
   name: string;
@@ -287,12 +300,12 @@ export interface BackupInfo {
 // M4：AI 教练层（types 对齐后端 snake_case DTO）
 // ============================================================
 
-/** AI 配置（敏感：api_key 存 app_data_dir/config.json，不入 vault 不入 git） */
+/** AI 配置（对外视图，不含 key：key 走 setApiKey 单独命令，永不全量回读，防 XSS 窃取 + devtools 暴露） */
 export interface AiSettings {
   /** "claude" | "openai"（未知 → build_client None，走降级） */
   provider: string;
-  /** API key（空 → 走本地启发式降级） */
-  api_key: string;
+  /** 是否已配置 API key（后端按 config.json 的 api_key 是否为空算，明文 key 不回前端） */
+  has_key: boolean;
   /** 是否启用 AI（false → build_client None） */
   enabled: boolean;
 }

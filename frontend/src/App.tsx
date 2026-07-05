@@ -1,6 +1,7 @@
 // Helmose · Obsidian 式工作台外壳
 // Ribbon + 左文件面板（可拖拽宽）+ 中标签页编辑区 + 右反向链接面板（可拖拽宽）+ 底状态栏
 import "./components/App.css";
+import { safeGetItem, safeSetItem } from "./utils/safeLocalStorage";
 import { useEffect, useState, type MouseEvent } from "react";
 import { App as AntdApp, Modal, Spin } from "antd";
 import * as api from "./api";
@@ -47,9 +48,9 @@ export default function App() {
       // urgency 三态迁移（Blocker #1 方案 B）：存量 urgency="low"（无标记旧默认值）需刷新为 ""（未设），
       // 否则 computeUrgencyMap 会把存量今天/本周到期任务误当显式 low 压制。首次启动强制全量重索引一次。
       const MIGRATION_KEY = "helmose-urgency-3state-v1";
-      if (localStorage.getItem(MIGRATION_KEY) !== "1") {
+      if (safeGetItem(MIGRATION_KEY) !== "1") {
         const stats = await useVaultStore.getState().index();
-        if (stats) localStorage.setItem(MIGRATION_KEY, "1"); // 索引成功才标记，失败下次启动重试
+        if (stats) safeSetItem(MIGRATION_KEY, "1"); // 索引成功才标记，失败下次启动重试
         return;
       }
       if (!v.last_indexed) {
@@ -228,7 +229,8 @@ export default function App() {
   };
 
   return (
-    <div className="ob-app">
+    <ErrorBoundary label="应用渲染失败">
+      <div className="ob-app">
       <Ribbon />
       {filePanelOpen && <FilePanel width={fileWidth} />}
       {filePanelOpen && <div className="ob-resizer" onMouseDown={startResize("file")} />}
@@ -265,6 +267,7 @@ export default function App() {
           <kbd>Esc</kbd><span>关闭弹窗</span>
         </div>
       </Modal>
-    </div>
+      </div>
+    </ErrorBoundary>
   );
 }

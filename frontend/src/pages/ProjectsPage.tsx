@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   InputNumber,
-  message,
   Segmented,
   Select,
   Space,
@@ -17,6 +16,7 @@ import {
 import { PlusOutlined } from "@ant-design/icons";
 import AppIcon from "../components/AppIcon";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import { useProjectViewStore, type ProjectView } from "../stores/projectView";
 import { relativeTime } from "../utils/date";
@@ -112,7 +112,7 @@ export default function ProjectsPage() {
       await api.setTag(p.note_id, "project-status", status);
       bumpTick();
     } catch (e) {
-      message.error(`状态修改失败：${e}`);
+      notifyError("状态修改", e);
       void refresh(); // 回滚 UI 到真实状态（vault 未改，刷新后下拉框还原）
     }
   };
@@ -121,7 +121,7 @@ export default function ProjectsPage() {
       await api.setTag(p.note_id, "mainline", on ? "mainline" : null);
       bumpTick();
     } catch (e) {
-      message.error(`主线修改失败：${e}`);
+      notifyError("主线修改", e);
       void refresh();
     }
   };
@@ -131,7 +131,7 @@ export default function ProjectsPage() {
       await api.patchFrontmatter(p.note_id, "priority", priority);
       bumpTick();
     } catch (e) {
-      message.error(`优先级修改失败：${e}`);
+      notifyError("优先级修改", e);
       void refresh();
     }
   };

@@ -23,6 +23,7 @@ import { PlusOutlined } from "@ant-design/icons";
 import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import { useAllNotesMeta } from "../hooks/useAllNotesMeta";
 import DataState from "../components/DataState";
@@ -181,7 +182,7 @@ export default function JournalPage() {
       useVaultStore.getState().bumpTick();
       setDrawerNoteId(nc.id);
     } catch (e) {
-      message.error(`新建失败（可能已存在）：${e}`);
+      notifyError("新建", e);
     } finally {
       setSaving(false);
     }

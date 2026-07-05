@@ -3,10 +3,11 @@
 // 字段写入成功后 onChanged（父层 bumpTick 刷新看板）。
 // 即时反馈：每个字段 useState 维护，onChange 先 setState 再异步写回；key={noteId} 时重置。
 import { useState } from "react";
-import { AutoComplete, DatePicker, Input, InputNumber, Rate, Select, Slider, Space, Switch, message } from "antd";
+import { AutoComplete, DatePicker, Input, InputNumber, Rate, Select, Slider, Space, Switch } from "antd";
 import { SmileOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useActiveProjects } from "../hooks/useActiveProjects";
 import { PROJECT_STATUS_OPTIONS } from "./projectViews/shared";
 
@@ -53,7 +54,7 @@ export default function NoteFieldsForm({ noteId, noteType, tags, frontmatter, on
       await fn();
       onChanged?.();
     } catch (e) {
-      message.error(`${label}失败：${e}`);
+      notifyError(label, e);
     }
   };
 
@@ -191,7 +192,7 @@ function LogFieldsForm({
       await fn();
       onChanged?.();
     } catch (e) {
-      message.error(`${label}失败：${e}`);
+      notifyError(label, e);
     }
   };
 

@@ -1,7 +1,8 @@
 // 主题状态（亮/暗）：localStorage 持久化 + 系统 prefers-color-scheme 兜底 + html.dark class 驱动 CSS 变量。
 // 配合 main.tsx 的 ConfigProvider darkAlgorithm（antd 组件）+ index.css html.dark（--ob-* 变量）双轨切换。
-
+// 收口到 safeLocalStorage（B15）：读用 safeGetItem（需区分「未设」→跟系统，故不用白名单版），写静默降级。
 import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../utils/safeLocalStorage";
 
 export type Theme = "light" | "dark";
 
@@ -20,10 +21,9 @@ function applyDom(t: Theme) {
 }
 
 function readInitial(): Theme {
-  if (typeof localStorage !== "undefined") {
-    const saved = localStorage.getItem(STORAGE_KEY) as Theme | null;
-    if (saved === "light" || saved === "dark") return saved;
-  }
+  // 用户手动设过（light/dark）→ 用之；否则跟系统 prefers-color-scheme。
+  const saved = safeGetItem(STORAGE_KEY);
+  if (saved === "light" || saved === "dark") return saved;
   if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
     return "dark";
   }
@@ -31,11 +31,7 @@ function readInitial(): Theme {
 }
 
 function persist(t: Theme) {
-  try {
-    localStorage.setItem(STORAGE_KEY, t);
-  } catch {
-    /* localStorage 不可用时静默（隐私模式等） */
-  }
+  safeSetItem(STORAGE_KEY, t);
 }
 
 const initial = readInitial();
@@ -61,11 +57,7 @@ export const useThemeStore = create<ThemeState>((set) => ({
 if (typeof window !== "undefined" && window.matchMedia) {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
   mq.addEventListener("change", (e) => {
-    try {
-      if (localStorage.getItem(STORAGE_KEY)) return; // 用户已手动设，不覆盖
-    } catch {
-      /* ignore */
-    }
+    if (safeGetItem(STORAGE_KEY)) return; // 用户已手动设，不覆盖
     const t: Theme = e.matches ? "dark" : "light";
     applyDom(t);
     useThemeStore.setState({ theme: t });

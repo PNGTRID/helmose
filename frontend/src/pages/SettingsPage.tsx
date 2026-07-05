@@ -20,10 +20,13 @@ import {
 import { DeleteOutlined, ExportOutlined, ReloadOutlined, SaveOutlined, SyncOutlined } from "@ant-design/icons";
 import AppIcon from "../components/AppIcon";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import type { AgentExport, AiSettings, BackupInfo, MigratePlan, MigratePreview, UpdateStatus } from "../types";
 import { useMarkingStyleStore, type MarkingStyle } from "../stores/markingStyle";
 import { isInbox } from "../utils/taskGrouping";
+import { clearAllDrafts } from "../utils/drafts";
+import { decideApiKeyAction } from "../utils/aiSettings";
 
 const { Text } = Typography;
 
@@ -40,6 +43,9 @@ export default function SettingsPage() {
   const [trash, setTrash] = useState<BackupInfo[]>([]);
   // —— AI 配置 ——
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+  // api_key 用独立 useState 而非 Form 字段（B4 安全）：Form state 全局可读，XSS 注入后可 getField 读明文 key；
+  // 独立 state + 提交即清，缩短明文 key 残留窗口（用户输入→保存→清空，几秒内完成）
+  const [apiKeyInput, setApiKeyInput] = useState("");
   const [aiForm] = Form.useForm<AiSettings>();
   const [aiSaving, setAiSaving] = useState(false);
   // —— 任务标记风格（helmose 文字 / obsidian emoji）——
@@ -75,7 +81,7 @@ export default function SettingsPage() {
       const preview = await api.migrateTaskMarks(plans, markingStyle, true);
       setMigratePreview(preview);
     } catch (e) {
-      message.error(`扫描失败：${e}`);
+      notifyError("扫描", e);
     } finally {
       setMigrating(false);
     }
@@ -88,7 +94,7 @@ export default function SettingsPage() {
       message.success(`已固化 ${result.note_count} 篇笔记的 ${result.item_count} 个任务（已备份到 .helmose/backup）`);
       setMigratePreview(null);
     } catch (e) {
-      message.error(`迁移失败：${e}`);
+      notifyError("迁移", e);
     } finally {
       setMigrating(false);
     }
@@ -138,7 +144,7 @@ export default function SettingsPage() {
       message.success("已删除备份");
       await loadBackups();
     } catch (e) {
-      message.error(`删除失败：${e}`);
+      notifyError("删除", e);
     }
   };
 
@@ -149,7 +155,7 @@ export default function SettingsPage() {
       message.success(`已永久清空 ${n} 项`);
       await loadTrash();
     } catch (e) {
-      message.error(`清空失败：${e}`);
+      notifyError("清空", e);
     }
   };
 
@@ -162,17 +168,18 @@ export default function SettingsPage() {
       message.success("已移除当前 vault，回到 onboarding");
       await load();
     } catch (e) {
-      message.error(`移除失败：${e}`);
+      notifyError("移除", e);
     }
   };
 
   const resetApp = async () => {
     try {
       await api.resetApp();
+      clearAllDrafts(); // 清本地草稿缓存（防 vault 正文副本残留在 webview localStorage）
       message.success("已重置 Helmose，回到安装引导");
       await load();
     } catch (e) {
-      message.error(`重置失败：${e}`);
+      notifyError("重置", e);
     }
   };
 
@@ -204,7 +211,7 @@ export default function SettingsPage() {
         `已导出（${out.pending_tasks} 待办 / ${out.total_notes} 笔记）`
       );
     } catch (e) {
-      message.error(`导出失败：${e}`);
+      notifyError("导出", e);
     } finally {
       setExporting(false);
     }
@@ -215,18 +222,28 @@ export default function SettingsPage() {
     try {
       const values = await aiForm.validateFields();
       setAiSaving(true);
-      const updated = await api.setAiSettings({
+      // provider/enabled 走 setAiSettings（key 不经此命令，防 IPC/state 暴露明文）
+      let updated = await api.setAiSettings({
         provider: values.provider,
-        api_key: values.api_key ?? "",
+        has_key: aiSettings?.has_key ?? false, // 占位：后端不读，真正 has_key 由下方 get/setApiKey 重读
         enabled: !!values.enabled,
       });
+      // 用户输入了新 key → 单独写（key 走 keyring，明文不进 Form state/IPC 返回）
+      // 留空保存 = 保留旧 key（不清除）；决策抽 decideApiKeyAction 可单测
+      const { shouldSetKey, key } = decideApiKeyAction(apiKeyInput);
+      if (shouldSetKey) {
+        await api.setApiKey(key);
+        updated = await api.getAiSettings(); // 重读最新 has_key
+      }
       setAiSettings(updated);
+      // 清空 key 输入（独立 state 立即清，防驻留）；provider/enabled 回填 Form
+      setApiKeyInput("");
       aiForm.setFieldsValue(updated);
       message.success("AI 配置已保存");
     } catch (e) {
       // validateFields 抛 ValidationError（无 errorFields 字段时为真实异常）
       if (e && typeof e === "object" && "errorFields" in e) return;
-      message.error(`保存失败：${e}`);
+      notifyError("保存", e);
     } finally {
       setAiSaving(false);
     }
@@ -335,7 +352,7 @@ export default function SettingsPage() {
           form={aiForm}
           layout="vertical"
           initialValues={
-            aiSettings ?? { provider: "claude", api_key: "", enabled: false }
+            aiSettings ?? { provider: "claude", has_key: false, enabled: false }
           }
         >
           <Form.Item
@@ -357,12 +374,13 @@ export default function SettingsPage() {
             </Radio.Group>
           </Form.Item>
           <Form.Item
-            name="api_key"
-            label="API Key"
-            tooltip="仅存本机 app_data_dir/config.json，不入 vault 不入 git"
+            label={aiSettings?.has_key ? "API Key（已配置，输入新值可替换）" : "API Key"}
+            tooltip="仅存本机钥匙串（keyring），不入 config.json/vault/git；为安全不再回读，留空保存=不变"
           >
             <Input.Password
-              placeholder="sk-..."
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              placeholder={aiSettings?.has_key ? "（已配置，留空不变）" : "sk-..."}
               autoComplete="off"
               visibilityToggle
             />

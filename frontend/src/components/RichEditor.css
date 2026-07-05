@@ -94,3 +94,29 @@
   background: var(--ob-accent-mod);
   pointer-events: none;
 }
+
+/* —— md 源码模式 textarea（等宽、铺满、可纵向拉伸；与 .tiptap-content 的 padding/min-height 对齐）—— */
+.rich-editor-md-source textarea {
+  width: 100%;
+  min-height: 360px;
+  padding: 16px 20px;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ob-text);
+  background: var(--ob-bg);
+  border: 1px solid var(--ob-border);
+  border-radius: 6px;
+  outline: none;
+  resize: vertical;
+}
+
+/* —— 编辑器状态栏（字数/字符/行数，右对齐等宽小字）—— */
+.editor-statusbar {
+  font-size: 12px;
+  color: var(--ob-text-faint);
+  text-align: right;
+  padding: 4px 12px;
+  border-top: 1px solid var(--ob-border);
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+}

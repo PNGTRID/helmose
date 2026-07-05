@@ -4,6 +4,7 @@ import "./QuickAddEventModal.css";
 import { Modal, message } from "antd";
 import { useEffect, useState } from "react";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import { buildEventBullet } from "../utils/quickAdd";
 import EventFields, { type EventFieldValue, emptyEventFields } from "./EventFields";
@@ -49,7 +50,7 @@ export default function QuickAddEventModal({ open, onCancel, onSuccess }: Props)
       onSuccess?.();
       onCancel();
     } catch (e) {
-      message.error(`添加失败：${e}`);
+      notifyError("添加", e);
     } finally {
       setSaving(false);
     }

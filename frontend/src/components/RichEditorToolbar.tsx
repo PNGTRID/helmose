@@ -6,9 +6,11 @@ import { Button, Input, Modal, Tooltip, Divider } from "antd";
 import {
   BoldOutlined,
   CheckSquareOutlined,
+  ClearOutlined,
   CodeOutlined,
   ItalicOutlined,
   LinkOutlined,
+  MinusOutlined,
   OrderedListOutlined,
   RedoOutlined,
   TableOutlined,
@@ -152,7 +154,10 @@ export default function RichEditorToolbar({ editor }: Props) {
         <CodeOutlined />
       </TBtn>
       <TBtn title="引用块" active={editor.isActive("blockquote")} onClick={() => editor.chain().focus().toggleBlockquote().run()}>
-        <span style={{ fontWeight: 700, fontSize: 16 }}>”</span>
+        <span style={{ fontWeight: 700, fontSize: 16 }}>"</span>
+      </TBtn>
+      <TBtn title="清除格式（回正文段落）" onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()}>
+        <ClearOutlined />
       </TBtn>
 
       <Divider type="vertical" style={{ margin: "0 4px" }} />
@@ -168,6 +173,9 @@ export default function RichEditorToolbar({ editor }: Props) {
       </TBtn>
       <TBtn title="插入表格（3×3，含表头）" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
         <TableOutlined />
+      </TBtn>
+      <TBtn title="分隔线（---）" onClick={() => editor.chain().focus().setHorizontalRule().run()}>
+        <MinusOutlined />
       </TBtn>
 
       <Divider type="vertical" style={{ margin: "0 4px" }} />

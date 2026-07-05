@@ -1,9 +1,53 @@
 // Tauri 命令封装（invoke）。Tauri v2 自动 camelCase↔snake_case 转换参数名。
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke as rawInvoke, type InvokeArgs } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getMarkingStyle } from '../stores/markingStyle';
-import type { AgentExport, AiCoachResult, AiMainline, AiSettings, AiTomorrowResult, Backlink, BackupInfo, Event, GraphData, IndexStats, MigratePlan, MigratePreview, MoveResult, Note, NoteContent, NoteMeta, Okr, Project, ProjectProgress, RefLoc, Reminder, ScaffoldStats, SearchResult, TagCount, Task, UpdateStatus, Vault, VaultInput } from '../types';
+import type { AgentExport, AiCoachResult, AiMainline, AiSettings, AiTomorrowResult, AppErrorCode, Backlink, BackupInfo, Event, GraphData, IndexStats, MigratePlan, MigratePreview, MoveResult, Note, NoteContent, NoteMeta, Okr, Project, ProjectProgress, RefLoc, Reminder, ScaffoldStats, SearchResult, TagCount, Task, UpdateStatus, Vault, VaultInput } from '../types';
+
+// ============================================================
+// B1+B14：统一错误收口。后端命令返 Result<T, AppError>，AppError 经 IPC 序列化为
+// {code, message}；此处把 reject 归一化成前端 AppError 对象（code 可按类分流），替代旧
+// Result<T, String> 的裸字符串。toString()=message 让现有 `${e}` 直显零破（阶段1 兼容）。
+// ============================================================
+
+/** 应用统一错误（对齐后端 AppError）。extends Error 让现有 `instanceof Error ? e.message` 站点天然兼容。 */
+export class AppError extends Error {
+  code: AppErrorCode;
+  constructor(code: AppErrorCode, message: string) {
+    super(message);
+    this.name = 'AppError';
+    this.code = code;
+  }
+  override toString() {
+    return this.message;
+  }
+}
+
+const VALID_CODES: ReadonlySet<string> = new Set([
+  'NotFound', 'InvalidInput', 'Conflict', 'PreconditionFailed', 'Db', 'Io', 'Serde', 'Secrets', 'Internal',
+]);
+
+/** 把 Tauri reject 值（{code,message} 对象 / 残留 string / Error / 其他）归一化成 AppError。 */
+function normalizeAppError(e: unknown): AppError {
+  if (e instanceof AppError) return e;
+  if (e !== null && typeof e === 'object' && 'code' in e && 'message' in e) {
+    const code = (e as { code: unknown }).code;
+    const message = String((e as { message: unknown }).message);
+    const validCode = typeof code === 'string' && VALID_CODES.has(code) ? (code as AppErrorCode) : 'Internal';
+    return new AppError(validCode, message);
+  }
+  if (typeof e === 'string') return new AppError('Internal', e);
+  if (e instanceof Error) return new AppError('Internal', e.message);
+  return new AppError('Internal', String(e));
+}
+
+/** invoke 包装：reject 经 normalizeAppError 归一化成 AppError 抛出。所有命令封装统一走此包装。 */
+function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
+  return rawInvoke<T>(cmd, args).catch((e) => {
+    throw normalizeAppError(e);
+  });
+}
 
 export async function ping(): Promise<string> {
   return invoke<string>('ping');
@@ -478,14 +522,19 @@ export async function migrateTaskMarks(
 // M4：AI 教练层（命令封装，对齐后端 snake_case）
 // ============================================================
 
-/** 读 AI 设置（api_key 在返回值里，仅前端设置页用） */
+/** 读 AI 设置（对外不含 key：返 has_key 状态，明文 key 永不回前端） */
 export async function getAiSettings(): Promise<AiSettings> {
   return invoke<AiSettings>('get_ai_settings');
 }
 
-/** 写 AI 设置（合并到 config.json 的 ai 子对象，保留其他字段） */
+/** 写 AI 设置（provider/enabled；key 不经此命令，走 setApiKey 独立管理） */
 export async function setAiSettings(settings: AiSettings): Promise<AiSettings> {
   return invoke<AiSettings>('set_ai_settings', { settings });
+}
+
+/** 单独写入 API key（与 provider/enabled 解耦，防 key 经 settings 对象在 IPC/state 暴露） */
+export async function setApiKey(apiKey: string): Promise<void> {
+  return invoke<void>('set_api_key', { apiKey });
 }
 
 /** AI 主线判定（未配 key 自动走启发式，source 标降级） */

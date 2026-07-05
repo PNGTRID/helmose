@@ -5,6 +5,7 @@ import "./QuickAddProjectModal.css";
 import { Input, Modal, Segmented, Select, Switch, message } from "antd";
 import { useEffect, useState } from "react";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 import {
   buildProjectFrontmatter,
@@ -93,7 +94,7 @@ export default function QuickAddProjectModal({ open, onCancel, onSuccess }: Prop
       onSuccess?.(nc.id);
       onCancel();
     } catch (e) {
-      message.error(`创建失败（可能已存在）：${e}`);
+      notifyError("创建", e);
     } finally {
       setSaving(false);
     }

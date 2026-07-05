@@ -19,7 +19,9 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import * as api from "../../api";
+import { notifyError } from "../../utils/notifyError";
 import "./AiCoachCard.css";
+import { safeReadJSON, safeSetItem } from "../../utils/safeLocalStorage";
 import type {
   AiCoachResult,
   AiMainline,
@@ -38,19 +40,11 @@ interface AiCache {
   tomorrow?: AiTomorrowResult | null;
 }
 function readAiCache(vaultId: string): AiCache {
-  try {
-    return JSON.parse(localStorage.getItem(cacheKey(vaultId)) ?? "{}");
-  } catch {
-    return {};
-  }
+  return safeReadJSON<AiCache>(cacheKey(vaultId), {});
 }
 function writeAiCache(vaultId: string, patch: Partial<AiCache>) {
-  try {
-    const cur = readAiCache(vaultId);
-    localStorage.setItem(cacheKey(vaultId), JSON.stringify({ ...cur, ...patch }));
-  } catch {
-    /* localStorage 不可用时静默（隐私模式等）*/
-  }
+  const cur = readAiCache(vaultId);
+  safeSetItem(cacheKey(vaultId), JSON.stringify({ ...cur, ...patch }));
 }
 
 /** source 文本 → (source key, 中文标签)。用于 pill 角标区分来源（AI / 本地推断 / 上次结果）*/
@@ -119,7 +113,7 @@ export default function AiCoachCard({
       setMainline(r);
       writeAiCache(vaultId, { mainline: r });
     } catch (e) {
-      message.error(`主线判定失败：${e}`);
+      notifyError("主线判定", e);
     } finally {
       setMainlineLoading(false);
     }
@@ -132,7 +126,7 @@ export default function AiCoachCard({
       setCoach(r);
       writeAiCache(vaultId, { coach: r });
     } catch (e) {
-      message.error(`教练建议失败：${e}`);
+      notifyError("教练建议", e);
     } finally {
       setCoachLoading(false);
     }
@@ -145,7 +139,7 @@ export default function AiCoachCard({
       setTomorrow(r);
       writeAiCache(vaultId, { tomorrow: r });
     } catch (e) {
-      message.error(`生成明日一句失败：${e}`);
+      notifyError("生成明日一句", e);
     } finally {
       setTomorrowLoading(false);
     }
@@ -168,7 +162,7 @@ export default function AiCoachCard({
       setEditingTomorrow(false);
       message.success("已保存");
     } catch (e) {
-      message.error(`保存失败：${e}`);
+      notifyError("保存", e);
     } finally {
       setTomorrowLoading(false);
     }

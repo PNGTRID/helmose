@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { safeGetItem, safeSetItem } from "../utils/safeLocalStorage";
 import { Alert, Button, Card, Input, Space, Typography, message } from "antd";
 import { FolderOpenOutlined } from "@ant-design/icons";
 import AppIcon from "../components/AppIcon";
 import { exists } from "@tauri-apps/plugin-fs";
 import * as api from "../api";
+import { notifyError } from "../utils/notifyError";
 import { useVaultStore } from "../stores/vault";
 
 const { Title, Text } = Typography;
@@ -13,14 +15,8 @@ export default function OnboardingPage() {
   const setVault = useVaultStore((s) => s.setVault);
   const index = useVaultStore((s) => s.index);
   // 路径/名称记忆上次输入（localStorage），减少重复输入
-  const [path, setPath] = useState(
-    () => {
-      try {
-        return localStorage.getItem("helmose-last-path") || "/Users/yuanruiqin/wiki";
-      } catch {
-        return "/Users/yuanruiqin/wiki";
-      }
-    }
+  const [path, setPath] = useState(() =>
+    safeGetItem("helmose-last-path") ?? "/Users/yuanruiqin/wiki"
   );
   const [name, setName] = useState("袁锐钦的人生Wiki");
   const [obsidian, setObsidian] = useState<boolean | null>(null);
@@ -28,11 +24,7 @@ export default function OnboardingPage() {
 
   const rememberPath = (p: string) => {
     setPath(p);
-    try {
-      localStorage.setItem("helmose-last-path", p);
-    } catch {
-      /* ignore */
-    }
+    safeSetItem("helmose-last-path", p);
   };
 
   const detectObsidian = async (p: string) => {
@@ -67,7 +59,7 @@ export default function OnboardingPage() {
       message.success("已添加 vault，开始索引…");
       await index();
     } catch (e) {
-      message.error(`添加失败：${e}`);
+      notifyError("添加", e);
     } finally {
       setBusy(false);
     }
@@ -95,11 +87,10 @@ export default function OnboardingPage() {
     } catch (e) {
       // scaffold 成功但 addVault/index 失败：目录已铺文件，重试会被「已有 vault」拒绝。
       // 引导用户改用「添加并索引」打开该目录，避免卡死。
-      message.error(
-        scaffolded
-          ? `骨架已生成但后续步骤失败（${e}）。请改用上方「添加并索引」打开该目录`
-          : `创建失败：${e}`
-      );
+      notifyError(scaffolded ? "骨架生成后续步骤" : "创建", e);
+      if (scaffolded) {
+        message.warning("目录已铺文件，请改用上方「添加并索引」打开该目录");
+      }
     } finally {
       setBusy(false);
     }

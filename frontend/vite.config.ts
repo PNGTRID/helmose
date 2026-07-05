@@ -20,6 +20,9 @@ export default defineConfig(async () => ({
     },
   },
   build: {
+    // antd 单 chunk 1.15MB 触发 rollup 默认 500KB 警告；桌面应用本地加载可接受
+    // (CLAUDE.md backlog 已背书)，调高阈值消噪音(真正瘦身见 backlog §1 antd 按需评估)。
+    chunkSizeWarningLimit: 1500,
     // 拆 vendor chunk：react / antd / tiptap(含 prosemirror) / tauri / utils 分离，
     // 主应用 chunk 更小、长期缓存友好。用函数形式按 module id 匹配——
     // 对象形式会对每个包名 resolve 主 entry，而 @tiptap/pm 无主 entry（子路径导出）会报错。
