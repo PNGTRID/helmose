@@ -5,7 +5,7 @@ import { unescapeWikilink } from "./RichEditor";
 
 describe("unescapeWikilink", () => {
   it("还原单个双链的成对转义括号", () => {
-    expect(unescapeWikilink("见 \\[\\[袁锐钦\\]\\]")).toBe("见 [[袁锐钦]]");
+    expect(unescapeWikilink("见 \\[\\[张三\\]\\]")).toBe("见 [[张三]]");
   });
 
   it("还原带 alias 的双链（| 不被转义，原样保留）", () => {

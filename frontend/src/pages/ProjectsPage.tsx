@@ -87,12 +87,12 @@ export default function ProjectsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault?.id, watcherTick]);
 
-  if (!vault) return null;
-
   const shown = useMemo(
     () => (onlyMainline ? projects.filter((p) => p.is_mainline) : projects),
     [projects, onlyMainline]
   );
+
+  if (!vault) return null;
 
   // 看板分组（按 status）
   const groups = new Map<string, Project[]>();

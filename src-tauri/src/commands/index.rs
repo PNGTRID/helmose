@@ -38,11 +38,12 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> AppResult<IndexStats>
     let started = std::time::Instant::now();
     let root = vault_root(vault_id, db)?;
 
-    // 更新状态为 scanning
-    let _ = db.sqlite().execute(
+    // 更新状态为 scanning——真错经 #[from] 自动转 AppError::Db 上抛，避免 DB 异常后
+    // indexing_state 卡在旧值误导前端 UI（B6 精神：不静默吞真错）。
+    db.sqlite().execute(
         "UPDATE vaults SET indexing_state = 'scanning' WHERE id = ?1",
         params![vault_id],
-    );
+    )?;
 
     // 1. 遍历 + 解析（id 延后到碰撞消歧后生成）
     let mut parsed: Vec<indexer::ParsedNote> = Vec::new();
@@ -388,10 +389,18 @@ pub fn index_vault_inner(vault_id: &str, db: &Database) -> AppResult<IndexStats>
 
     stats.elapsed_ms = started.elapsed().as_millis() as u64;
 
-    let _ = db.sqlite().execute(
+    // 此处主事务已 commit、stats 已返——索引数据已确实写盘。若 UPDATE 失败（DB 锁/磁盘满）
+    // 用 `?` 上抛会让前端误以为整次索引失败（实际数据已成功），故仅记 warn 日志 + 仍返 Ok(stats)。
+    // 前端 shouldReindex 兜底会在下次启动时根据磁盘/notes 数差异决定是否补索引。
+    if let Err(e) = db.sqlite().execute(
         "UPDATE vaults SET last_indexed = ?1, indexing_state = 'idle' WHERE id = ?2",
         params![crate::utils::dates::now_iso8601(), vault_id],
-    );
+    ) {
+        tracing::warn!(
+            "[index_vault] 更新 vaults.last_indexed/indexing_state 失败（索引数据已写盘）: {}",
+            e
+        );
+    }
 
     Ok(stats)
 }
@@ -478,9 +487,16 @@ pub fn should_reindex_inner(vault_id: &str, db: &Database) -> AppResult<bool> {
 
 /// 检测是否需要重新索引：磁盘 md 数与 notes 表数差异 >10%，或 notes 为 0。
 /// 用于启动时自动追赶「磁盘已变但索引未更新」（如 vault 重构后没重新索引）。
+///
+/// 与 index_vault 对齐：should_reindex_inner 内部用 WalkDir 对 1.9 万文件全量遍历（仅计数），
+/// 属于阻塞型 IO，必须丢到 spawn_blocking 线程池，避免独占 Tauri async 命令线程槽
+///（启动路径 App.tsx 每次都会调一次，期间其他 async/sync 命令仍可被调度）。
 #[tauri::command]
-pub fn should_reindex(vault_id: String, db: State<'_, Database>) -> AppResult<bool> {
-    should_reindex_inner(&vault_id, db.inner())
+pub async fn should_reindex(vault_id: String, db: State<'_, Database>) -> AppResult<bool> {
+    let db = db.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || should_reindex_inner(&vault_id, &db))
+        .await
+        .map_err(|e| AppError::Internal(format!("should_reindex 调度失败：{}", e)))?
 }
 
 // ============================================================
@@ -857,7 +873,7 @@ mod tests {
     #[ignore]
     fn index_real_wiki_full_pipeline() {
         let root = std::env::var("HELMOSE_TEST_VAULT")
-            .unwrap_or_else(|_| "/Users/yuanruiqin/wiki".into());
+            .unwrap_or_else(|_| format!("{}/wiki", std::env::var("HOME").unwrap_or_default()));
         if !Path::new(&root).exists() {
             eprintln!("[smoke-full] skip: {} 不存在", root);
             return;

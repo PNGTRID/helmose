@@ -1,6 +1,7 @@
 // 轻量自绘 canvas 力导向图谱（不引入额外依赖，避免构建不确定性）
 // 力：中心引力 + 节点排斥 + 边弹簧；支持拖拽 + 点击节点跳转（移动 <5px 视为点击）。
 // 增强：hover 高亮 + cursor pointer + 暗色模式颜色适配（随 theme store 切换）。
+// 性能：物理收敛后停止 RAF 释放主线程；交互（resize / 拖拽释放）唤醒重启。
 
 import { useEffect, useRef } from "react";
 import { useThemeStore } from "../stores/theme";
@@ -27,6 +28,11 @@ const SPRING = 0.015;
 const SPRING_LEN = 70;
 const CENTER = 0.004;
 const DAMP = 0.85;
+// 收敛阈值：所有节点速度平方和低于此值视为静止，停止 RAF 主线程占用。
+// 交互（拖拽节点 / 窗口 resize / data 变化重建模拟）会唤醒重启 RAF。
+const CONVERGE_THRESHOLD = 0.5;
+// 防止极端抖动反复唤醒：连续收敛帧数达到此值才真正停 RAF。
+const CONVERGE_FRAMES = 6;
 
 export default function ForceGraph({
   data,
@@ -81,6 +87,8 @@ export default function ForceGraph({
     if (!ctx) return;
     const DPR = window.devicePixelRatio || 1;
     let raf = 0;
+    // 连续收敛帧计数：达到 CONVERGE_FRAMES 后停止 RAF，主线程释放。
+    let convergeFrame = 0;
     let dragIdx: number | null = null;
     let downX = 0;
     let downY = 0;
@@ -115,7 +123,7 @@ export default function ForceGraph({
           nodes[i].vx += (cx - nodes[i].x) * CENTER;
           nodes[i].vy += (cy - nodes[i].y) * CENTER;
         }
-        // 节点排斥（O(n²)，n≤600 可接受）
+        // 节点排斥（O(n²)，配合后端默认 limit=500 保证主线程可用）
         for (let i = 0; i < nodes.length; i++) {
           for (let j = i + 1; j < nodes.length; j++) {
             const dx = nodes[i].x - nodes[j].x;
@@ -142,16 +150,19 @@ export default function ForceGraph({
           nodes[b].vx -= (f * dx) / d;
           nodes[b].vy -= (f * dy) / d;
         }
-        // 积分 + 阻尼
+        // 积分 + 阻尼；同时累加速度平方和判定收敛。
+        // 拖拽中的节点速度被人为置 0，不参与判定（避免拖拽误判收敛停 RAF）。
+        let kinetic = 0;
         for (let i = 0; i < nodes.length; i++) {
           if (i === dragIdx) continue;
           nodes[i].vx *= DAMP;
           nodes[i].vy *= DAMP;
           nodes[i].x += nodes[i].vx;
           nodes[i].y += nodes[i].vy;
+          kinetic += nodes[i].vx * nodes[i].vx + nodes[i].vy * nodes[i].vy;
         }
 
-        // 绘制
+        // 绘制（无论是否继续模拟都要画当前帧；停 RAF 前最后画一次静止态）
         const c = colors();
         ctx.clearRect(0, 0, W, H);
         ctx.strokeStyle = c.edge;
@@ -178,10 +189,29 @@ export default function ForceGraph({
           ctx.fillStyle = isHover ? c.nodeHover : c.node;
           ctx.fill();
         }
+
+        // 收敛判定：动能低于阈值连续 N 帧则停 RAF，释放主线程（图谱静止后不再空转 O(n²)）。
+        // 拖拽中（dragIdx !== null）即使人为置 0 也不停，保证拖拽流畅。
+        if (kinetic < CONVERGE_THRESHOLD) {
+          convergeFrame++;
+          if (convergeFrame >= CONVERGE_FRAMES && dragIdx === null) {
+            raf = 0; // 标记 RAF 已停，wake() 据此判断是否需重启
+            return;
+          }
+        } else {
+          convergeFrame = 0;
+        }
       }
       raf = requestAnimationFrame(step);
     };
     raf = requestAnimationFrame(step);
+
+    // 唤醒物理循环：重置收敛计数 + 若 RAF 已停则重启。
+    // 触发点：resize（尺寸变化需重排）、拖拽释放（人为扰动需重新平衡）。
+    const wake = () => {
+      convergeFrame = 0;
+      if (!raf) raf = requestAnimationFrame(step);
+    };
 
     const relPos = (e: MouseEvent) => {
       const r = canvas.getBoundingClientRect();
@@ -226,6 +256,8 @@ export default function ForceGraph({
         const orig = data.nodes.find((d) => d.id === n.id);
         if (orig) onSelectRef.current(orig);
       }
+      // 释放节点后人造扰动需重新平衡：唤醒 RAF（若已停）。
+      if (dragIdx !== null) wake();
       dragIdx = null;
     };
     const onLeave = () => {
@@ -237,7 +269,11 @@ export default function ForceGraph({
     canvas.addEventListener("mousemove", onMove);
     canvas.addEventListener("mouseleave", onLeave);
     window.addEventListener("mouseup", onUp);
-    window.addEventListener("resize", resize);
+    const onResize = () => {
+      resize();
+      wake(); // 尺寸变化导致中心引力重排，唤醒 RAF
+    };
+    window.addEventListener("resize", onResize);
 
     return () => {
       cancelAnimationFrame(raf);
@@ -245,7 +281,7 @@ export default function ForceGraph({
       canvas.removeEventListener("mousemove", onMove);
       canvas.removeEventListener("mouseleave", onLeave);
       window.removeEventListener("mouseup", onUp);
-      window.removeEventListener("resize", resize);
+      window.removeEventListener("resize", onResize);
     };
   }, [data]);
 

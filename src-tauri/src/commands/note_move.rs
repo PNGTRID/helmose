@@ -19,7 +19,7 @@
 use crate::models::{AppError, AppResult, MoveResult, RefLoc};
 use crate::services::Database;
 use crate::utils::exclude::is_excluded;
-use crate::utils::path_safety::is_safe_rel;
+use crate::utils::path_safety::{assert_new_path_within, is_safe_rel};
 use regex::Regex;
 use rusqlite::params;
 use std::path::PathBuf;
@@ -111,7 +111,7 @@ fn fetch_note_loc(
             },
         )
         ?
-        .ok_or_else(|| format!("note {} not found", note_id))?;
+        .ok_or_else(|| AppError::not_found(format!("note {} not found", note_id)))?;
     Ok(row)
 }
 
@@ -213,11 +213,14 @@ fn move_or_rename(
         return Err(AppError::invalid_input(format!("非法路径（含 ..）：{}", new_rel)));
     }
     let new_abs = root.join(&new_rel);
+    // canonicalize 兜底：防 vault 内 symlink 父目录指向 vault 外（is_safe_rel 只防 `..` 段，不防 symlink）。
+    // 与 create_note_inner / save_note_content_inner 同源防御，正常路径 canonicalize 恒过，零行为变化。
+    assert_new_path_within(&new_abs, &root)?;
     if is_excluded(&new_abs, &root) {
         return Err(AppError::invalid_input(format!("目标在排除目录，无法索引：{}", new_rel)));
     }
     if new_abs == root.join(&old_rel) {
-        return Err("新旧路径相同".into());
+        return Err(AppError::invalid_input("新旧路径相同".to_string()));
     }
     if new_abs.exists() {
         return Err(AppError::conflict(format!("目标已存在：{}", new_rel)));
@@ -354,6 +357,10 @@ pub fn move_to_trash_inner(note_id: &str, db: &Database) -> AppResult<String> {
         trash_abs = root.join(&trash_rel);
     }
 
+    // canonicalize 兜底：防 vault 内 symlink 父目录指向 vault 外（is_safe_rel 只防 `..` 段，不防 symlink）。
+    // .trash 永远在 vault 内，正常路径 canonicalize 恒过；若 .trash 或其祖先被换成指向外部的 symlink，
+    // fs::rename 会跟随 symlink 把原文移出 vault（不可恢复，绕过铁律 2「写 vault 必带备份保护」），此处拦下。
+    assert_new_path_within(&trash_abs, &root)?;
     if let Some(parent) = trash_abs.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -415,7 +422,7 @@ pub fn apply_ref_updates_inner(
                 |r| r.get::<_, String>(0),
             )
             ?
-            .ok_or_else(|| format!("note {} not found", note_id))?;
+            .ok_or_else(|| AppError::not_found(format!("note {} not found", note_id)))?;
 
         // 按行替换：定位 line（1-based），仅该行内把 old_path 的链接形式 → new_path。
         // 多条引用可能命中同一行（一次 replace_path_refs 全改）或不同行（逐行 replace）。

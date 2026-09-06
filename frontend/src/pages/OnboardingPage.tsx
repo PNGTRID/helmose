@@ -15,10 +15,8 @@ export default function OnboardingPage() {
   const setVault = useVaultStore((s) => s.setVault);
   const index = useVaultStore((s) => s.index);
   // 路径/名称记忆上次输入（localStorage），减少重复输入
-  const [path, setPath] = useState(() =>
-    safeGetItem("helmose-last-path") ?? "/Users/yuanruiqin/wiki"
-  );
-  const [name, setName] = useState("袁锐钦的人生Wiki");
+  const [path, setPath] = useState(() => safeGetItem("helmose-last-path") ?? "");
+  const [name, setName] = useState("我的人生Wiki");
   const [obsidian, setObsidian] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -113,7 +111,7 @@ export default function OnboardingPage() {
                   style={{ width: "calc(100% - 110px)" }}
                   value={path}
                   onChange={(e) => rememberPath(e.target.value)}
-                  placeholder="如 /Users/yuanruiqin/wiki"
+                  placeholder="如 /Users/you/wiki"
                 />
                 <Button icon={<FolderOpenOutlined />} onClick={pick} style={{ width: 110 }}>
                   选择…

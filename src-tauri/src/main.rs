@@ -1,4 +1,4 @@
-// Prevents additional console window on Windows in release
+// release 模式隐藏 Windows 控制台窗口（防打包后弹出多余黑窗）
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
@@ -30,11 +30,11 @@ pub fn run() {
             let app_data_dir = app
                 .path()
                 .app_data_dir()
-                .expect("failed to get app data dir");
-            std::fs::create_dir_all(&app_data_dir).expect("failed to create app data dir");
+                .expect("获取应用数据目录失败");
+            std::fs::create_dir_all(&app_data_dir).expect("创建应用数据目录失败");
             let db_path = app_data_dir.join("helmose.db");
-            let db = Database::new(db_path).expect("failed to init database");
-            db.init_schema().expect("failed to init schema");
+            let db = Database::new(db_path).expect("初始化数据库失败");
+            db.init_schema().expect("初始化 schema 失败");
             tracing::debug!("[helmose] db: {}", db.path().display());
             app.manage(db);
 
@@ -64,7 +64,10 @@ pub fn run() {
             commands::library::list_all_notes_meta,
             commands::library::list_notes_by_tag,
             commands::library::get_note_content,
-            commands::library::save_note_content,
+            // 注：save_note_content 不注册 IPC——前端编辑动线全走 save_note_body（保留 fm）。
+            // save_note_content 接任意 noteId + content 整篇覆盖原文（含丢 fm），且前端无任何调用，
+            // 注册即等于对 webview 暴露破坏性写盘面（XSS 枚举 note_id 可批量污染）。
+            // save_note_content_inner 仍被 save_note_body / toggle_task / inline-crud 复用，行为零变化。
             commands::library::save_note_body,
             commands::library::toggle_task,
             // M3：任务字段就地写入（status / priority / urgency）
@@ -135,7 +138,7 @@ pub fn run() {
             commands::ai::update_tomorrow_sentence,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running helmose");
+        .expect("Helmose 运行异常");
 }
 
 fn main() {

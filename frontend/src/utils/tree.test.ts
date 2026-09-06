@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
+import type { ReactElement } from "react";
 import { makeCompare, childDirs, fileIcon } from "./tree";
 import {
   FileTextOutlined,
@@ -37,18 +38,18 @@ describe("childDirs", () => {
 
 describe("fileIcon", () => {
   it("md / markdown → FileTextOutlined", () => {
-    expect(fileIcon("note.md").type).toBe(FileTextOutlined);
-    expect(fileIcon("note.markdown").type).toBe(FileTextOutlined);
+    expect((fileIcon("note.md") as ReactElement).type).toBe(FileTextOutlined);
+    expect((fileIcon("note.markdown") as ReactElement).type).toBe(FileTextOutlined);
   });
 
   it("图片（大小写不敏感）→ FileImageOutlined", () => {
-    expect(fileIcon("pic.PNG").type).toBe(FileImageOutlined);
-    expect(fileIcon("pic.jpg").type).toBe(FileImageOutlined);
+    expect((fileIcon("pic.PNG") as ReactElement).type).toBe(FileImageOutlined);
+    expect((fileIcon("pic.jpg") as ReactElement).type).toBe(FileImageOutlined);
   });
 
   it("其他类型 → FileOutlined", () => {
-    expect(fileIcon("file.pdf").type).toBe(FileOutlined);
-    expect(fileIcon("noext").type).toBe(FileOutlined);
+    expect((fileIcon("file.pdf") as ReactElement).type).toBe(FileOutlined);
+    expect((fileIcon("noext") as ReactElement).type).toBe(FileOutlined);
   });
 });
 

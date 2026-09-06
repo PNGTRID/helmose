@@ -55,6 +55,51 @@ export default function SettingsPage() {
   const [migrating, setMigrating] = useState(false);
   const [migratePreview, setMigratePreview] = useState<MigratePreview | null>(null);
 
+  const loadBackups = async () => {
+    if (!vault) return;
+    setLoadingBackups(true);
+    try {
+      setBackups(await api.listBackups(vault.id));
+    } catch {
+      setBackups([]);
+    } finally {
+      setLoadingBackups(false);
+    }
+  };
+
+  const loadTrash = async () => {
+    if (!vault) return;
+    try {
+      setTrash(await api.listTrash(vault.id));
+    } catch {
+      setTrash([]);
+    }
+  };
+
+  useEffect(() => {
+    // cancelled flag 守竞态：vault 移除/重挂载时，in-flight 的 IPC 响应不再 setState（防卸载后脏写）。
+    // loadBackups/loadTrash 复用 reload 按钮（外部调用不应被 cancelled 屏蔽），但其内 try/catch 兜底，
+    // 卸载后 setState 在 React 19 无警告且无功能危害；此处只守 effect 内联的 4 个 fetch。
+    let cancelled = false;
+    loadBackups();
+    loadTrash();
+    if (vault) {
+      api.getNotesStats(vault.id)
+        .then((s) => { if (!cancelled) setTypeStats(s); })
+        .catch(() => { if (!cancelled) setTypeStats({}); });
+    }
+    // 加载 AI 设置（首次进入即填入表单）
+    api.getAiSettings()
+      .then((s) => {
+        if (cancelled) return;
+        setAiSettings(s);
+        aiForm.setFieldsValue(s);
+      })
+      .catch(() => { if (!cancelled) setAiSettings(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vault?.id]);
+
   if (!vault) return null;
 
   // 算迁移计划：温和版 isInbox 任务（priority=0 AND urgency="" AND due=null AND 顶层）→ 固化 priority=1
@@ -99,43 +144,6 @@ export default function SettingsPage() {
       setMigrating(false);
     }
   };
-
-  const loadBackups = async () => {
-    if (!vault) return;
-    setLoadingBackups(true);
-    try {
-      setBackups(await api.listBackups(vault.id));
-    } catch {
-      setBackups([]);
-    } finally {
-      setLoadingBackups(false);
-    }
-  };
-
-  const loadTrash = async () => {
-    if (!vault) return;
-    try {
-      setTrash(await api.listTrash(vault.id));
-    } catch {
-      setTrash([]);
-    }
-  };
-
-  useEffect(() => {
-    loadBackups();
-    loadTrash();
-    if (vault) {
-      api.getNotesStats(vault.id).then(setTypeStats).catch(() => setTypeStats({}));
-    }
-    // 加载 AI 设置（首次进入即填入表单）
-    api.getAiSettings()
-      .then((s) => {
-        setAiSettings(s);
-        aiForm.setFieldsValue(s);
-      })
-      .catch(() => setAiSettings(null));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vault?.id]);
 
   const deleteBackup = async (name: string) => {
     if (!vault) return;

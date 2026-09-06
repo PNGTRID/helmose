@@ -116,7 +116,7 @@ cd frontend && npm run tauri:build
 | 字段 | 说明 |
 |---|---|
 | provider | `claude` 或 `openai`（未知值 → 不启用 AI，走本地启发式） |
-| api_key | 你的 API key（存 `app_data_dir/config.json`，**Unix 0600，不入 vault 不入 git**） |
+| api_key | 你的 API key（存**系统钥匙串** keyring，**不入 vault 不入 git 不入 config.json**） |
 | enabled | 总开关；关闭或 key 为空 → 自动降级本地启发式 |
 
 > 不配置也能正常使用所有功能——AI 三个能力会降级为本地启发式（复用 projects top-3 排序口径），结果标注 `source=heuristic`。
@@ -155,7 +155,7 @@ UI 层（React + antd + TipTap WYSIWYG 编辑）
 - **vault 是唯一真相源**。SQLite 只是派生缓存——**删库可从 vault 全量重建**，永远不要把 SQLite 当主存。
 - **vault 原文只读**。索引 / 查询 / 浏览一律只读 md 文件；任何写 vault（编辑、行级 CRUD、移动引用更新）都必须有**用户明确动作** + **写前备份**（`<vault>/.helmose/backup/`，隐藏目录不索引）。绝不在用户没要求时改动 vault 原文。
 - **AI 不碰原文**。LLM 只接收聚合摘要（项目名 / 优先级 / 进度数字 + 全局统计），user 输入硬上限 4k 字符截断，**绝不发送 vault 正文**。
-- **key 不外泄**。AI key 存 `app_data_dir/config.json`（Unix 下收紧到 0600），不入 vault、不入 git；`AiSettings` 手写 Debug 屏蔽 api_key 防日志泄漏。
+- **key 不外泄**。AI key 存**系统钥匙串**（macOS Keychain / Windows Credential Manager / Linux Secret Service，via keyring v3），不入 vault、不入 git、不落 config.json；`AiSettings` 手写 Debug 屏蔽 api_key 防日志泄漏。config.json 只存 provider / enabled 等非敏感配置。
 - **与 Obsidian 共存**。`.obsidian/` 等隐藏目录保留、不索引、不破坏；排除目录单一契约（`utils/exclude.rs`）。
 - **纯本地、无云端**。数据主权完全在用户（AI 调用除外，且只发摘要）。
 
@@ -165,7 +165,7 @@ UI 层（React + antd + TipTap WYSIWYG 编辑）
 
 | 配置项 | 位置 | 说明 |
 |---|---|---|
-| AI 教练 | 设置页 → AI 教练配置 | provider / key / enabled，存 `config.json`（0600） |
+| AI 教练 | 设置页 → AI 教练配置 | provider / enabled 存 `config.json`；**api_key 存系统钥匙串**（keyring v3） |
 | 任务标记风格 | 设置页 → 任务标记风格 | `helmose`（文字，默认）/ `obsidian`（emoji，双端互通），localStorage 持久化 |
 | 到期提醒 | 固定 | 截止前一天 9:00 桌面通知（后续接 settings 可配） |
 | 排除目录 | `utils/exclude.rs` | `EXCLUDE_DIRS = ["6-原始资料", "专家团"]` + 隐藏目录，单一契约点 |
@@ -222,7 +222,7 @@ helmose/
 
 ✅ **已落地**：本地知识底座（契约索引 + 增量 + FTS5 + 虚拟列表）· Obsidian 式工作台（TipTap WYSIWYG + 反链/前链 + 图谱）· 任务与计划（多视图 + PlannerPage 四象限 + 标记文字化双模式 + 到期提醒）· 项目与目标（深度结构化 + 进度聚合 + OKR）· 时间视图（日历 / 今日聚焦 / 日志）· AI 教练层（M4，主线 / 每日建议 / 明日一句，降级链）· Agent 状态接口（LIFE-STATE.md + state.json）· 行级 CRUD / 移动感知 / 备份回收站 / 暗色 / ErrorBoundary / 自动更新框架 / 重置安装。
 
-🚧 **待办**：Agent inbox 写回 · 真实 updater endpoint/pubkey · events 的 project_id 关联 · 前向链接 dangling 提示 · AI 提醒可配置 · Ollama 本地 provider · bundle 拆分。
+🚧 **待办**：Agent inbox 写回 · 真实 updater endpoint/pubkey · events 的 project_id 关联 · 前向链接 dangling 提示 · AI 提醒可配置 · Ollama 本地 provider。
 
 各功能的设计文档与任务分解见 [`.spec-workflow/specs/`](.spec-workflow/specs/)。
 
@@ -249,4 +249,4 @@ helmose/
 
 ## 📄 License
 
-[MIT](package.json)（声明于 `package.json`；LICENSE 文件待补）。
+[MIT](LICENSE)（MIT License，详见根目录 `LICENSE` 文件）。

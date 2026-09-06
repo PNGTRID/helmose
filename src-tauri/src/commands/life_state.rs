@@ -45,7 +45,7 @@ pub fn export_life_state(
             },
         )
         ?
-        .ok_or_else(|| format!("vault {} not found", vault_id))?;
+        .ok_or_else(|| AppError::not_found(format!("vault {} not found", vault_id)))?;
 
     // 聚合统计
     let total_notes = count(db.inner(), "SELECT COUNT(*) FROM notes WHERE vault_id = ?1", &vid)?;

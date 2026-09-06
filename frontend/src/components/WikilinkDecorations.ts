@@ -15,7 +15,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as PmNode } from "@tiptap/pm/model";
 
 /** wikilink 正则：[[target]] 或 [[target|别名]]（与后端 extract_wikilinks 一致） */
-const WIKILINK_RE = /\[\[([^\]\|]+)(?:\|([^\]]+))?\]\]/g;
+const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 
 export interface WikilinkHit {
   /** 命中起点（相对文本起始的字符偏移） */

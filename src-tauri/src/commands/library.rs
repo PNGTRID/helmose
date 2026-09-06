@@ -35,7 +35,7 @@ fn vault_root(vault_id: &str, db: &Database) -> AppResult<PathBuf> {
             |row| row.get::<_, String>(0),
         )
         ?
-        .ok_or_else(|| format!("vault {} not found", vault_id))?;
+        .ok_or_else(|| AppError::not_found(format!("vault {} not found", vault_id)))?;
     Ok(PathBuf::from(path))
 }
 
@@ -246,7 +246,7 @@ fn fetch_note_content(note_id: &str, db: &Database) -> AppResult<NoteContent> {
             },
         )
         ?
-        .ok_or_else(|| format!("note {} not found", note_id))?;
+        .ok_or_else(|| AppError::not_found(format!("note {} not found", note_id)))?;
     let (id, rel_path, title, note_type, tags_json, fm_json, raw_content) = row;
     let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
     let frontmatter: serde_json::Value =
@@ -305,7 +305,7 @@ pub fn save_note_content_inner(
             },
         )
         ?
-        .ok_or_else(|| format!("note {} not found", note_id))?;
+        .ok_or_else(|| AppError::not_found(format!("note {} not found", note_id)))?;
     let (rel_path, root_path, vault_id) = row;
     let root = PathBuf::from(&root_path);
     let abs = root.join(&rel_path);
@@ -322,18 +322,26 @@ pub fn save_note_content_inner(
         let ts = crate::utils::dates::now_iso8601().replace(':', "-");
         let backup_path = backup_dir.join(format!("{}.{}.md", safe_name, ts));
         std::fs::copy(&abs, &backup_path).map_err(|e| {
+            // 错误消息不回显宿主绝对路径（防 XSS 经 IPC 枚举 note_id 触发备份失败外泄用户名/vault 位置，
+            // 与 export_life_state 去 root_path 同原则）。真实路径入 tracing 日志便于本地排障。
+            tracing::error!(
+                src = %abs.display(),
+                dst = %backup_path.display(),
+                error = %e,
+                "save 备份失败，已拒绝写入以保护原文"
+            );
             AppError::precondition_failed(format!(
-                "备份失败 {} -> {}：{}（已拒绝写入以保护原文，请清理磁盘或修正权限后重试）",
-                abs.display(),
-                backup_path.display(),
+                "备份失败：{}（已拒绝写入以保护原文，请清理磁盘或修正权限后重试）",
                 e
             ))
         })?;
     }
 
     // 3. 确保父目录存在，写新内容到 vault 原文
+    //    失败应裸 ? 上抛真实原因（权限/磁盘满/路径非法）——之前 `let _ =` 吞掉会让接下来的
+    //    fs::write 报「No such file or directory」误导排障（写 vault 原文是高敏感操作，失败点须清晰）。
     if let Some(parent) = abs.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&abs, content)?;
 
@@ -350,12 +358,17 @@ pub fn save_note_content_inner(
             |r| r.get::<_, String>(0),
         )
         ?
-        .ok_or_else(|| format!("save 后未找到笔记：{}", rel_path))?;
+        .ok_or_else(|| AppError::Internal(format!("save 后未找到笔记：{}", rel_path)))?;
     fetch_note_content(&new_id, db)
 }
 
 /// 保存笔记内容（写回 vault md 原文 + 自动备份 + 增量重索引）。
 /// 命令壳：State 解包 + 转调 save_note_content_inner，行为零变化。
+///
+/// 注：本命令已从 main.rs invoke_handler! 移除（不再注册为 IPC）——它接受任意 noteId + content
+/// 整篇覆盖 vault 原文（含丢 frontmatter），破坏性高且前端编辑动线全走 save_note_body（保留 fm）。
+/// 保留函数定义供未来内部 DRY 调用与文档参考；`#[allow(dead_code)]` 抑制未注册警告。
+#[allow(dead_code)]
 #[tauri::command]
 pub fn save_note_content(
     note_id: String,
@@ -487,7 +500,8 @@ fn advance_repeat_task(
     let cur_due: Option<chrono::NaiveDate> = crate::services::indexer::tasks::extract_due_from_line(&cur_line);
 
     let base = cur_due.unwrap_or_else(today_naive);
-    let next = add_period(base, &rule).ok_or_else(|| format!("无效 repeat_rule: {}", rule))?;
+    let next = add_period(base, &rule)
+        .ok_or_else(|| AppError::invalid_input(format!("无效 repeat_rule: {}", rule)))?;
     let next_iso = next.format("%Y-%m-%d").to_string();
 
     // 写回 bullet：替换已有 📅 日期；若无 📅 但有 due:/截止:/deadline 文本标记也替换；
@@ -630,7 +644,9 @@ pub fn set_task_status_inner(
 
     let caps = RE_LINE_SPLIT
         .captures(&le.line)
-        .ok_or_else(|| format!("行 {} 不是合法 bullet：{}", source_line, le.line))?;
+        .ok_or_else(|| {
+            AppError::invalid_input(format!("行 {} 不是合法 bullet：{}", source_line, le.line))
+        })?;
     let prefix = caps[1].to_string(); // `- ` / `* ` 等
     let _checkbox_opt = caps.get(2).map(|m| m.as_str()).unwrap_or("");
     let body_text = caps[3].to_string();
@@ -903,7 +919,7 @@ pub fn delete_note_inner(note_id: &str, db: &Database) -> AppResult<String> {
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
         )
         ?
-        .ok_or_else(|| format!("note {} not found", note_id))?;
+        .ok_or_else(|| AppError::not_found(format!("note {} not found", note_id)))?;
     let root = PathBuf::from(&root_path);
     let abs = root.join(&rel_path);
     let mut dest = String::new();
@@ -927,8 +943,23 @@ pub fn delete_note_inner(note_id: &str, db: &Database) -> AppResult<String> {
 }
 
 /// 删除笔记（软删除到 .helmose/trash，可恢复）。NoteView 删除按钮触发。
+/// 安防:dialog 二次确认——防 webview XSS 注入后 JS 一键删除笔记（与 clear_trash 同模式）。
 #[tauri::command]
-pub fn delete_note(note_id: String, db: State<'_, Database>) -> AppResult<String> {
+pub fn delete_note(
+    app: tauri::AppHandle,
+    note_id: String,
+    db: State<'_, Database>,
+) -> AppResult<String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+    let confirmed = app
+        .dialog()
+        .message("此操作将把该笔记移到回收站。确认继续？")
+        .title("确认删除笔记")
+        .kind(MessageDialogKind::Warning)
+        .blocking_show();
+    if !confirmed {
+        return Ok(String::new());
+    }
     delete_note_inner(&note_id, db.inner())
 }
 
@@ -976,7 +1007,7 @@ pub fn create_note_inner(
             |r| r.get::<_, String>(0),
         )
         ?
-        .ok_or_else(|| format!("索引后未找到新笔记：{}", rel_path))?;
+        .ok_or_else(|| AppError::Internal(format!("索引后未找到新笔记：{}", rel_path)))?;
     fetch_note_content(&note_id, db)
 }
 
@@ -1046,7 +1077,7 @@ fn note_rel_and_root(note_id: &str, db: &Database) -> AppResult<(String, PathBuf
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
         ?
-        .ok_or_else(|| format!("note {} not found", note_id))?;
+        .ok_or_else(|| AppError::not_found(format!("note {} not found", note_id)))?;
     Ok((row.0, PathBuf::from(row.1)))
 }
 
@@ -1287,7 +1318,7 @@ pub fn append_bullet_inner(
     let body = body_of(&full);
     let mut lines: Vec<String> = body.lines().map(String::from).collect();
     let insert_at = section_insert_index(&lines, section)
-        .ok_or_else(|| format!("未找到 section: {}", section))?;
+        .ok_or_else(|| AppError::invalid_input(format!("未找到 section: {}", section)))?;
     let bullet = if text.trim_start().starts_with("- ") {
         // 前端传入完整 bullet（buildTaskBullet 已含 `- [ ]` 前缀，含缩进子任务），原样追加
         text.to_string()
@@ -1369,7 +1400,7 @@ pub fn patch_frontmatter_inner(
     let full = read_full(note_id, db)?;
     let mut lines: Vec<String> = full.lines().map(String::from).collect();
     let (fm_start, fm_end) = frontmatter_bounds(&lines)
-        .ok_or_else(|| "笔记无 frontmatter，无法 patch".to_string())?;
+        .ok_or_else(|| AppError::precondition_failed("笔记无 frontmatter，无法 patch".to_string()))?;
     let serialized = serialize_yaml_scalar(&value);
     let key_pat = format!("{}:", key);
     let mut found = false;
@@ -1429,7 +1460,7 @@ pub fn set_tag_inner(
     let full = read_full(note_id, db)?;
     let mut lines: Vec<String> = full.lines().map(String::from).collect();
     let (fm_start, fm_end) = frontmatter_bounds(&lines)
-        .ok_or_else(|| "笔记无 frontmatter，无法 set_tag".to_string())?;
+        .ok_or_else(|| AppError::precondition_failed("笔记无 frontmatter，无法 set_tag".to_string()))?;
 
     let new_tag = value.map(|v| {
         if v == tag_prefix {
@@ -1542,14 +1573,26 @@ pub fn list_backups(
 }
 
 /// 删除单个备份（name 不含路径分隔符，防穿越；只删 .helmose/backup/<name>）。
+/// 安防:dialog 二次确认——防 webview XSS 注入后 JS 一键删备份（与 clear_trash 同模式）。
 #[tauri::command]
 pub fn delete_backup(
+    app: tauri::AppHandle,
     vault_id: String,
     name: String,
     db: State<'_, Database>,
 ) -> AppResult<()> {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err(AppError::invalid_input(format!("非法备份名：{}", name)));
+    }
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+    let confirmed = app
+        .dialog()
+        .message(format!("确认删除备份 {}？该操作不可恢复。", name))
+        .title("确认删除备份")
+        .kind(MessageDialogKind::Warning)
+        .blocking_show();
+    if !confirmed {
+        return Ok(());
     }
     let root = vault_root(&vault_id, db.inner())?;
     let path = backup_dir_of(&root).join(&name);
@@ -1765,7 +1808,9 @@ pub fn get_graph_data(
     use crate::models::{GraphData, GraphEdge, GraphNode};
     use std::collections::{HashMap, HashSet};
 
-    let max = limit.unwrap_or(1000) as usize;
+    // ForceGraph step 每帧 O(n²) 排斥力（节点两两 sqrt），1000 节点 = 50 万次浮点 ≈ 主线程饱和；
+    // 默认 500 已是单帧 8ms 预算上限，前端 GraphPage 显式传 limit=500，None 兜底也用 500 防超量卡顿。
+    let max = limit.unwrap_or(500) as usize;
 
     // 所有已解析的正向链接
     let raw_edges: Vec<(String, String)> = db
@@ -1904,8 +1949,8 @@ mod tests {
 
     #[test]
     fn wikilink_basic_replaced() {
-        let s = render_wikilinks("见 [[袁锐钦]] 和 [[Picboil|出海工具]]");
-        assert!(s.contains("data-target=\"袁锐钦\""));
+        let s = render_wikilinks("见 [[张三]] 和 [[Picboil|出海工具]]");
+        assert!(s.contains("data-target=\"张三\""));
         assert!(s.contains("data-target=\"Picboil\""));
         assert!(s.contains(">出海工具<")); // alias 作为显示文本
     }
@@ -1920,9 +1965,9 @@ mod tests {
 
     #[test]
     fn markdown_renders_wikilink_as_link() {
-        let html = render_markdown("见 [[袁锐钦]]");
+        let html = render_markdown("见 [[张三]]");
         assert!(html.contains("helmose-wikilink"));
-        assert!(html.contains("data-target=\"袁锐钦\""));
+        assert!(html.contains("data-target=\"张三\""));
     }
 
     /// list_notes_by_tag：精确匹配 tags JSON 数组元素，不误命中含相同前缀的 tag。

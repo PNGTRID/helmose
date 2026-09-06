@@ -186,12 +186,24 @@ pub fn reset_db_inner(db: &Database) -> AppResult<()> {
 /// 重置 Helmose：清 SQLite（DROP 全表 + 重建空 schema，移除 vault 注册）+ 清 app_data_dir/agent 派生导出。
 /// 绝不碰 vault 原文（铁律 1）。重置后前端 reload → getDefaultVault 返回 None → 回 Onboarding。
 /// 必须先停 watcher：否则 reset 后旧 watcher 仍监听旧 vault，把删除事件当增量往已清空的 DB 写回（数据回潮）。
+/// 安防:dialog 二次确认——防 webview XSS 注入后 JS 一键清空派生缓存（与 clear_trash 同模式，
+/// 前端 Modal 不能作为抗 XSS 最后防线，后端 dialog 兜底）。
 #[tauri::command]
 pub fn reset_app(
     app: AppHandle,
     db: State<'_, Database>,
     wm: State<'_, crate::services::watcher::WatcherManager>,
 ) -> AppResult<()> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+    let confirmed = app
+        .dialog()
+        .message("此操作将清空所有派生数据（索引、缓存、Agent 导出），需重新全量索引。vault 原文不会被改动。确认继续？")
+        .title("确认重置 Helmose")
+        .kind(MessageDialogKind::Warning)
+        .blocking_show();
+    if !confirmed {
+        return Ok(());
+    }
     wm.inner().stop()?;
     reset_db_inner(db.inner())?;
     // 清 Agent 导出缓存（app_data_dir/agent），目录可能不存在 → 失败不致命

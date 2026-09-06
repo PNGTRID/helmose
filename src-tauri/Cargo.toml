@@ -12,7 +12,7 @@ tauri-build = { version = "2.0", features = [] }
 [dependencies]
 # devtools:Tauri v2 在 debug 构建自动启用(cfg(debug_assertions));release 不带此 feature,
 # 防 webview 右键 Inspect 暴露用户数据(笔记/AI 输入)。开发期 tauri:dev 仍有 devtools。
-tauri = { version = "2.0" }
+tauri = { version = "2.0", features = [] }
 tauri-plugin-shell = "2.0"
 tauri-plugin-dialog = "2.0"
 tauri-plugin-fs = "2.0"

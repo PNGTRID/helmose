@@ -105,10 +105,26 @@ export default function TodayPage() {
   useEffect(() => {
     if (!vault) return;
     void refresh();
-    // AI 设置不随 watcherTick 抖动重拉（用户在 SettingsPage 改才会变）
-    api.getAiSettings().then(setAiSettings).catch(() => setAiSettings(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault?.id, watcherTick]);
+
+  // AI 设置不随 watcherTick 抖动重拉（用户在 SettingsPage 改才会变），
+  // 仅在 vault 切换时拉一次；cancelled 守卫防快速切 vault 时脏写。
+  useEffect(() => {
+    if (!vault) return;
+    let cancelled = false;
+    api
+      .getAiSettings()
+      .then((s) => {
+        if (!cancelled) setAiSettings(s);
+      })
+      .catch(() => {
+        if (!cancelled) setAiSettings(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [vault?.id]);
 
   if (!vault) return null;
 

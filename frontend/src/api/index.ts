@@ -209,14 +209,9 @@ export async function exportLifeState(vaultId: string): Promise<AgentExport> {
 // Obsidian 式能力：编辑 / 反向链接 / 图谱 / 标签 / 文件监听
 // ============================================================
 
-/** 保存笔记内容（写回 vault 原文 + 自动备份 + 增量重索引）。
- *  注意：content 会原样写盘，含 fm 才保留 fm；WYSIWYG 编辑正文应改用 saveNoteBody。 */
-export async function saveNoteContent(
-  noteId: string,
-  content: string
-): Promise<NoteContent> {
-  return invoke<NoteContent>('save_note_content', { noteId, content });
-}
+// 注：saveNoteContent 不再暴露——后端 save_note_content 命令已从 IPC 注册移除（最小权限原则：
+// 它接任意 noteId + content 整篇覆盖原文含丢 fm，破坏性高且前端无实际调用——前端编辑动线全走 saveNoteBody）。
+// save_note_content_inner 仍被后端 save_note_body / toggle_task / inline-crud 复用，行为零变化。
 
 /** 保存笔记正文（保留原 frontmatter）：读盘取原 fm → 拼接新正文 → 备份+写盘+索引。
  *  WYSIWYG 编辑器只编辑正文（raw_content 已去 fm），用此命令保存不会丢 fm。

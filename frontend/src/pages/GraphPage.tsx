@@ -34,12 +34,24 @@ export default function GraphPage() {
 
   useEffect(() => {
     if (!vault) return;
+    // cancelled flag：watcherTick 快速变化（写入后频繁自增）或组件卸载时，
+    // 丢弃过期的 fetch 响应，避免旧数据覆盖新数据（竞态）及卸载后无效 setState。
+    let cancelled = false;
     setLoading(true);
     api
       .getGraphData(vault.id) // 不传 limit → 后端默认取所有有连接的节点（top 1000）
-      .then(setData)
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
+      .then((res) => {
+        if (!cancelled) setData(res);
+      })
+      .catch(() => {
+        if (!cancelled) setData(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault?.id, watcherTick]);
 

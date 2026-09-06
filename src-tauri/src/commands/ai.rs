@@ -540,7 +540,7 @@ pub fn replace_section_first_bullet_inner(
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
         ?
-        .ok_or_else(|| format!("note {} not found", note_id))?;
+        .ok_or_else(|| AppError::not_found(format!("note {} not found", note_id)))?;
     let abs = std::path::PathBuf::from(&row.1).join(&row.0);
     let full = std::fs::read_to_string(&abs)?;
     let body = crate::services::indexer::frontmatter::parse(&full).content;

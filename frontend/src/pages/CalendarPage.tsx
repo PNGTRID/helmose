@@ -172,14 +172,21 @@ export default function CalendarPage() {
   const selectedNotes = selectedKey ? byDate.get(selectedKey) ?? [] : [];
   const selectedEvents = selectedKey ? byDateEvents.get(selectedKey) ?? [] : [];
 
+  // 确保该日日志存在（有则复用，无则创建），返回 note_id。
+  // 并发去重：同一 rel 的并发请求复用同一 Promise（审查：避免连点/批量时重复 createNote）。
+  const ensuringRef = useRef<Map<string, Promise<string>>>(new Map());
+
+  // —— M3 任务 13/14：DnD ——
+  // PointerSensor 5px activation 避免误触；ModifierSensor 读 keyboard shift 状态用于「复制」语义
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
   if (!vault) return null;
 
   // 该日日志相对路径（07_决策与复盘/日志/YYYY-MM/YYYY-MM-DD.md）—— 复用 journalTemplates 单一源
   const dayNoteRel = (d: Dayjs) => dayNoteRelPath(d, "daily");
 
-  // 确保该日日志存在（有则复用，无则创建），返回 note_id。
-  // 并发去重：同一 rel 的并发请求复用同一 Promise（审查：避免连点/批量时重复 createNote）。
-  const ensuringRef = useRef<Map<string, Promise<string>>>(new Map());
   const ensureDayNote = async (d: Dayjs): Promise<string> => {
     const rel = dayNoteRel(d);
     const existing = byRelPath.get(rel);
@@ -239,12 +246,6 @@ export default function CalendarPage() {
       notifyError("删除", e);
     }
   };
-
-  // —— M3 任务 13/14：DnD ——
-  // PointerSensor 5px activation 避免误触；ModifierSensor 读 keyboard shift 状态用于「复制」语义
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
-  );
 
   const onDragStart = (e: DragStartEvent) => {
     const data = e.active.data.current as DndPayload | undefined;

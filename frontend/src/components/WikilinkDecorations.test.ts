@@ -7,15 +7,15 @@ import { parseWikilinksInText } from "./WikilinkDecorations";
 
 describe("parseWikilinksInText", () => {
   it("基本 [[target]] 命中且 target 正确", () => {
-    const hits = parseWikilinksInText("见 [[袁锐钦]]");
+    const hits = parseWikilinksInText("见 [[张三]]");
     expect(hits).toHaveLength(1);
-    expect(hits[0].target).toBe("袁锐钦");
+    expect(hits[0].target).toBe("张三");
   });
 
   it("index/length 精确覆盖 [[ ]] 全长", () => {
-    const text = "见 [[袁锐钦]] 尾";
+    const text = "见 [[张三]] 尾";
     const hits = parseWikilinksInText(text);
-    expect(text.slice(hits[0].index, hits[0].index + hits[0].length)).toBe("[[袁锐钦]]");
+    expect(text.slice(hits[0].index, hits[0].index + hits[0].length)).toBe("[[张三]]");
   });
 
   it("别名 [[target|alias]]：target 取首段，alias 不影响 target", () => {

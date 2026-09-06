@@ -19,15 +19,17 @@ function mkTask(partial: Partial<Task> & { id: string }): Task {
     vault_id: partial.vault_id ?? "v1",
     text: partial.text ?? "t",
     done: partial.done ?? false,
-    due_date: partial.due_date,
+    due_date: partial.due_date ?? null,
     source: partial.source ?? "checkbox",
     source_line: partial.source_line ?? 1,
-    project_id: partial.project_id,
+    project_id: partial.project_id ?? null,
     created_at: partial.created_at ?? "2026-01-01",
-    completed_at: partial.completed_at,
+    completed_at: partial.completed_at ?? null,
     status: partial.status ?? "todo",
     priority: partial.priority ?? 0,
     urgency: partial.urgency ?? "", // 默认未设（无标记，前端 due_date 派生；三态 Blocker #1 方案 B）
+    repeat_rule: partial.repeat_rule ?? null,
+    parent_task_id: partial.parent_task_id ?? null,
   };
 }
 

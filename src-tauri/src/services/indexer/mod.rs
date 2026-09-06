@@ -246,8 +246,8 @@ tags: []
         use walkdir::WalkDir;
         use crate::utils::exclude::is_excluded_component; // 复用契约，避免排除规则漂移
 
-        let root =
-            std::env::var("HELMOSE_TEST_VAULT").unwrap_or_else(|_| "/Users/yuanruiqin/wiki".into());
+        let root = std::env::var("HELMOSE_TEST_VAULT")
+            .unwrap_or_else(|_| format!("{}/wiki", std::env::var("HOME").unwrap_or_default()));
         if !Path::new(&root).exists() {
             eprintln!("[smoke] skip: {} 不存在", root);
             return;
