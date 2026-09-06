@@ -42,5 +42,5 @@ Thumbs.db
 # 覆盖率产物（vitest / cargo-llvm-cov）
 coverage/
 
-# spec-workflow 本地工作目录
-.spec-workflow/
+# spec-workflow：只忽略工具本地审批状态，specs/steering/templates 文档正常入库
+.spec-workflow/approvals/
